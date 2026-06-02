@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from rest_framework.decorators import action
 from django.contrib.auth import authenticate
 from rest_framework_simplejwt.tokens import RefreshToken
-
+from rest_framework.permissions import AllowAny
 from .models import User, Team
 from .serializers import UserSerializer, TeamSerializer
 
@@ -59,7 +59,36 @@ class TeamViewSet(viewsets.ModelViewSet):
 # =========================
 # LOGIN API (JWT)
 # =========================
+
+
 class LoginView(APIView):
+
+    permission_classes = [AllowAny]   # 🔥 THIS FIXES 401
+
+    def post(self, request):
+
+        username = request.data.get("username")
+        password = request.data.get("password")
+
+        user = authenticate(username=username, password=password)
+
+        if not user:
+            return Response(
+                {"detail": "Invalid credentials"},
+                status=401
+            )
+
+        refresh = RefreshToken.for_user(user)
+
+        return Response({
+            "access": str(refresh.access_token),
+            "user": {
+                "id": user.id,
+                "username": user.username,
+                "role": user.role,
+                "team": user.team.id if user.team else None
+            }
+        })
 
     def post(self, request):
 
