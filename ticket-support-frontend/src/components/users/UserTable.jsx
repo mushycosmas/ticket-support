@@ -1,7 +1,7 @@
 import React from "react";
 import { Button, Table, Badge } from "react-bootstrap";
 
-const UserTable = ({ users, onEdit, onDelete }) => {
+const UserTable = ({ users, onEdit, onDelete ,onResetPassword}) => {
     return (
         <Table striped bordered hover responsive>
 
@@ -69,26 +69,35 @@ const UserTable = ({ users, onEdit, onDelete }) => {
                             </td>
 
                             {/* ACTIONS */}
-                            <td>
+                          <td>
 
-                                <Button
-                                    size="sm"
-                                    className="me-2"
-                                    variant="info"
-                                    onClick={() => onEdit(user)}
-                                >
-                                    Edit
-                                </Button>
+    <Button
+        size="sm"
+        className="me-2"
+        variant="info"
+        onClick={() => onEdit(user)}
+    >
+        Edit
+    </Button>
 
-                                <Button
-                                    size="sm"
-                                    variant="danger"
-                                    onClick={() => onDelete(user)}
-                                >
-                                    Delete
-                                </Button>
+    <Button
+        size="sm"
+        className="me-2"
+        variant="warning"
+        onClick={() => onResetPassword(user)}
+    >
+        Reset Password
+    </Button>
 
-                            </td>
+    <Button
+        size="sm"
+        variant="danger"
+        onClick={() => onDelete(user)}
+    >
+        Delete
+    </Button>
+
+</td>
 
                         </tr>
                     ))

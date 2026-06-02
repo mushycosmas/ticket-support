@@ -1,7 +1,12 @@
 import React, { useEffect, useState } from "react";
 import { Button, Card, Spinner, Alert } from "react-bootstrap";
 
-import { getUsers, deleteUser } from "../../api/userApi";
+import {
+    getUsers,
+    deleteUser,
+    resetUserPassword
+} from "../../api/userApi";
+
 import UserTable from "../../components/users/UserTable";
 import UserFormModal from "../../components/users/UserFormModal";
 import ConfirmDeleteModal from "../../components/users/ConfirmDeleteModal";
@@ -65,6 +70,23 @@ const Users = () => {
         }
     };
 
+    // =========================
+    // RESET PASSWORD
+    // =========================
+    const handleResetPassword = async (user) => {
+
+        if (!window.confirm("Reset password to support123?")) return;
+
+        try {
+            await resetUserPassword(user.id);
+            alert("Password reset successfully");
+
+        } catch (err) {
+            console.error("Reset password failed", err);
+            alert("Failed to reset password");
+        }
+    };
+
     return (
         <div className="container mt-4">
 
@@ -110,6 +132,7 @@ const Users = () => {
                                 setSelectedUser(user);
                                 setShowDelete(true);
                             }}
+                            onResetPassword={handleResetPassword}
                         />
                     )}
 
