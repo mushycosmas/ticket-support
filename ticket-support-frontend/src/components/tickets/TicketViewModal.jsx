@@ -1,5 +1,5 @@
 import React from "react";
-import { Modal, Form, Badge } from "react-bootstrap";
+import { Modal, Form, Badge, Row, Col } from "react-bootstrap";
 import AssignTicketForm from "./AssignTicketForm";
 
 const TicketViewModal = ({ show, onHide, ticket, onRefresh }) => {
@@ -9,6 +9,9 @@ const TicketViewModal = ({ show, onHide, ticket, onRefresh }) => {
     return (
         <Modal show={show} onHide={onHide} size="lg">
 
+            {/* ===================== */}
+            {/* HEADER */}
+            {/* ===================== */}
             <Modal.Header closeButton>
                 <Modal.Title>
                     Ticket #{ticket.id}
@@ -17,42 +20,89 @@ const TicketViewModal = ({ show, onHide, ticket, onRefresh }) => {
 
             <Modal.Body>
 
+                {/* ===================== */}
+                {/* CUSTOMER INFO */}
+                {/* ===================== */}
                 <Form>
 
-                    <Form.Control
-                        className="mb-2"
-                        value={ticket.customer_name}
-                        disabled
-                    />
+                    <Form.Group className="mb-2">
+                        <Form.Label>Customer Name</Form.Label>
+                        <Form.Control
+                            value={ticket.customer_name || "-"}
+                            disabled
+                        />
+                    </Form.Group>
 
-                    <Form.Control
-                        className="mb-2"
-                        value={ticket.customer_contact}
-                        disabled
-                    />
+                    <Form.Group className="mb-2">
+                        <Form.Label>Contact</Form.Label>
+                        <Form.Control
+                            value={ticket.customer_contact || "-"}
+                            disabled
+                        />
+                    </Form.Group>
 
-                    <Form.Control
-                        className="mb-2"
-                        value={ticket.title}
-                        disabled
-                    />
+                    <Form.Group className="mb-2">
+                        <Form.Label>Title</Form.Label>
+                        <Form.Control
+                            value={ticket.title || "-"}
+                            disabled
+                        />
+                    </Form.Group>
 
-                    <Form.Control
-                        as="textarea"
-                        rows={3}
-                        value={ticket.description}
-                        disabled
-                    />
-
-                    <div className="mt-3">
-                        <Badge bg="info">{ticket.status}</Badge>{" "}
-                        <Badge bg="warning">{ticket.priority}</Badge>
-                    </div>
+                    <Form.Group className="mb-2">
+                        <Form.Label>Description</Form.Label>
+                        <Form.Control
+                            as="textarea"
+                            rows={3}
+                            value={ticket.description || "-"}
+                            disabled
+                        />
+                    </Form.Group>
 
                 </Form>
 
+                {/* ===================== */}
+                {/* WORKFLOW INFO */}
+                {/* ===================== */}
+                <Row className="mt-3">
+
+                    <Col>
+                        <strong>Status:</strong><br />
+                        <Badge bg="info">
+                            {ticket.status || "OPEN"}
+                        </Badge>
+                    </Col>
+
+                    <Col>
+                        <strong>Priority:</strong><br />
+                        <Badge bg="warning">
+                            {ticket.priority || "MEDIUM"}
+                        </Badge>
+                    </Col>
+
+                    <Col>
+                        <strong>Team:</strong><br />
+                        <Badge bg="secondary">
+                            {ticket.team_name || `Team #${ticket.team}` || "Unassigned"}
+                        </Badge>
+                    </Col>
+
+                    <Col>
+                        <strong>Assigned Agent:</strong><br />
+                        <Badge bg="dark">
+                            {ticket.assigned_to_name || `User #${ticket.assigned_to}` || "Unassigned"}
+                        </Badge>
+                    </Col>
+
+                </Row>
+
+                {/* ===================== */}
                 {/* ASSIGN SECTION */}
+                {/* ===================== */}
+                <hr />
+
                 <AssignTicketForm
+                    ticket={ticket}
                     ticketId={ticket.id}
                     onSuccess={onRefresh}
                 />
