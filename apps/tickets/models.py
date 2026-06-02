@@ -26,7 +26,7 @@ class Ticket(models.Model):
         ('CRITICAL', 'Critical'),
     ]
 
-    # 🧑 customer is NOT registered user
+    #  customer is NOT registered user
     customer_name = models.CharField(max_length=255, default='Unknown')
     customer_contact = models.CharField(max_length=100, default='Not Provided')
 
