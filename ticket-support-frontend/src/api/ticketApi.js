@@ -27,7 +27,7 @@ export const resolveTicket = (id) =>
 export const closeTicket = (id) =>
     api.post(`/tickets/tickets/${id}/close/`);
 
-export const assignTicket = (id, agent) =>
-    api.post(`/tickets/tickets/${id}/assign/`, {
-        agent,
-    });
+
+
+export const assignTicket = (id, data) =>
+    api.post(`/tickets/tickets/${id}/assign/`, data);

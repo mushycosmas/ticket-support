@@ -10,21 +10,20 @@ const AssignTicketForm = ({ ticket, ticketId, onSuccess }) => {
     const [loading, setLoading] = useState(false);
 
     // =====================
-    // LOAD TEAM MEMBERS ONLY
+    // LOAD TEAM AGENTS
     // =====================
     useEffect(() => {
+
         const loadTeamAgents = async () => {
+
             try {
                 const res = await getUsers();
 
-                // STEP 1: get ticket team
                 const teamId = ticket?.team;
 
-                // STEP 2: filter agents inside same team
-                const teamAgents = res.data.filter(
-                    user =>
-                        user.role === "AGENT" &&
-                        user.team === teamId
+                const teamAgents = res.data.filter(user =>
+                    user.role === "AGENT" &&
+                    Number(user.team) === Number(teamId)
                 );
 
                 setAgents(teamAgents);
@@ -43,28 +42,30 @@ const AssignTicketForm = ({ ticket, ticketId, onSuccess }) => {
     // =====================
     // ASSIGN
     // =====================
-    const handleAssign = async () => {
+  const handleAssign = async () => {
 
-        if (!agentId) return;
+    console.log("agentId =", agentId);
 
-        try {
-            setLoading(true);
+    if (!agentId) {
+        alert("Please select an agent");
+        return;
+    }
 
-            await assignTicket(ticketId, {
-                assigned_to: agentId,
-                status: "IN_PROGRESS"
-            });
+    try {
+        setLoading(true);
 
-            setAgentId("");
-            onSuccess();
+        await assignTicket(ticketId, {
+            assigned_to: Number(agentId)
+        });
 
-        } catch (err) {
-            console.error("Assignment failed", err);
-        } finally {
-            setLoading(false);
-        }
-    };
+        onSuccess();
 
+    } catch (err) {
+        console.error(err.response?.data);
+    } finally {
+        setLoading(false);
+    }
+};
     return (
         <div className="mt-3">
 
@@ -72,7 +73,6 @@ const AssignTicketForm = ({ ticket, ticketId, onSuccess }) => {
 
             <div className="d-flex gap-2">
 
-                {/* AGENT SELECT */}
                 <Form.Select
                     value={agentId}
                     onChange={(e) => setAgentId(e.target.value)}
@@ -86,7 +86,6 @@ const AssignTicketForm = ({ ticket, ticketId, onSuccess }) => {
                     ))}
                 </Form.Select>
 
-                {/* BUTTON */}
                 <Button
                     onClick={handleAssign}
                     disabled={loading}
