@@ -34,7 +34,9 @@ const Tickets = () => {
         setLoading(true);
         try {
             const res = await getTickets();
-            setTickets(res.data);
+            setTickets(res.data || []);
+        } catch (err) {
+            console.error(err?.response?.data || err);
         } finally {
             setLoading(false);
         }
@@ -53,33 +55,64 @@ const Tickets = () => {
     };
 
     const handleDelete = async () => {
-        await deleteTicket(deleteId);
-        setDeleteId(null);
-        loadTickets();
+        try {
+            await deleteTicket(deleteId);
+            setDeleteId(null);
+            loadTickets();
+        } catch (err) {
+            console.error(err?.response?.data || err);
+        }
     };
 
     // =====================
     // WORKFLOW ACTIONS
     // =====================
     const handleResolve = async (id) => {
-        await resolveTicket(id);
-        loadTickets();
+        try {
+            await resolveTicket(id);
+            loadTickets();
+        } catch (err) {
+            console.error(err?.response?.data || err);
+        }
     };
 
     const handleClose = async (id) => {
-        await closeTicket(id);
-        loadTickets();
+        try {
+            await closeTicket(id);
+            loadTickets();
+        } catch (err) {
+            console.error(err?.response?.data || err);
+        }
     };
 
     // =====================
-    // ROLE HELPERS
+    // HELPERS (FIXED)
     // =====================
-    const isAgentOwner = (ticket) => {
-        return user?.role === "AGENT" && ticket.assigned_to === user?.id;
+
+    const getAssignedId = (ticket) => {
+        return ticket.assigned_to_id ??
+            ticket.assigned_to?.id ??
+            ticket.assigned_to;
     };
 
-    const canClose = () => {
-        return user?.role === "ADMIN" || user?.role === "TEAM_LEAD";
+    const isAssignedAgent = (ticket) => {
+        if (user?.role !== "AGENT") return false;
+
+        return Number(getAssignedId(ticket)) === Number(user?.id);
+    };
+
+    const canResolve = (ticket) => {
+        return (
+            isAssignedAgent(ticket) &&
+            String(ticket.status).toUpperCase() === "IN_PROGRESS"
+        );
+    };
+
+    const canClose = (ticket) => {
+        return (
+            (user?.role === "ADMIN" || user?.role === "TEAM_LEAD") &&
+            String(ticket.status).toUpperCase() === "RESOLVED"
+        );
     };
 
     return (
@@ -117,7 +150,7 @@ const Tickets = () => {
                             </thead>
 
                             <tbody>
-                                {tickets.map(t => (
+                                {tickets.map((t) => (
                                     <tr key={t.id}>
 
                                         <td>{t.id}</td>
@@ -155,9 +188,9 @@ const Tickets = () => {
                                             )}
 
                                             {/* ===================== */}
-                                            {/* AGENT ACTIONS */}
+                                            {/* RESOLVE (AGENT ONLY) */}
                                             {/* ===================== */}
-                                            {isAgentOwner(t) && t.status === "IN_PROGRESS" && (
+                                            {canResolve(t) && (
                                                 <Button
                                                     size="sm"
                                                     variant="warning"
@@ -168,9 +201,9 @@ const Tickets = () => {
                                             )}
 
                                             {/* ===================== */}
-                                            {/* CLOSE ACTION */}
+                                            {/* CLOSE (ADMIN / TEAM LEAD) */}
                                             {/* ===================== */}
-                                            {canClose() && t.status === "RESOLVED" && (
+                                            {canClose(t) && (
                                                 <Button
                                                     size="sm"
                                                     variant="success"

@@ -2,11 +2,17 @@ import React, { useEffect, useState } from "react";
 import { Modal, Form, Button, Spinner } from "react-bootstrap";
 import { createTicket } from "../../api/ticketApi";
 import { getTeams } from "../../api/teamApi";
+import { getUsers } from "../../api/userApi";
 
 const CreateTicketModal = ({ show, onHide, onSuccess }) => {
 
+    const user = JSON.parse(localStorage.getItem("user"));
+
     const [loading, setLoading] = useState(false);
     const [teams, setTeams] = useState([]);
+    const [agents, setAgents] = useState([]);
+
+    const [mode, setMode] = useState("agent"); // admin only: agent | team
 
     const [formData, setFormData] = useState({
         customer_name: "",
@@ -15,27 +21,82 @@ const CreateTicketModal = ({ show, onHide, onSuccess }) => {
         title: "",
         description: "",
         priority: "MEDIUM",
-        team: ""
+        team: "",
+        assigned_to: ""
     });
 
     // ======================
-    // LOAD TEAMS
+    // RESET FORM
     // ======================
     useEffect(() => {
-        const loadTeams = async () => {
-            try {
-                const res = await getTeams();
-                setTeams(res.data);
-            } catch (err) {
-                console.error("Failed to load teams", err);
-            }
-        };
-
-        if (show) loadTeams();
+        if (show) {
+            setFormData({
+                customer_name: "",
+                customer_contact: "",
+                channel: "WEB",
+                title: "",
+                description: "",
+                priority: "MEDIUM",
+                team: "",
+                assigned_to: ""
+            });
+            setMode("agent");
+        }
     }, [show]);
 
     // ======================
-    // HANDLE INPUT CHANGE
+    // LOAD TEAMS + USERS
+    // ======================
+    useEffect(() => {
+
+        const loadData = async () => {
+            try {
+                const [teamsRes, usersRes] = await Promise.all([
+                    getTeams(),
+                    getUsers()
+                ]);
+
+                const allTeams = teamsRes.data || [];
+                const allUsers = usersRes.data || [];
+
+                setTeams(allTeams);
+
+                // ======================
+                // ROLE FILTERING
+                // ======================
+                if (user.role === "TEAM_LEAD") {
+
+                    const myTeamId = user.team;
+
+                    setAgents(
+                        allUsers.filter(
+                            u =>
+                                u.role === "AGENT" &&
+                                Number(u.team_id) === Number(myTeamId)
+                        )
+                    );
+
+                    setFormData(prev => ({
+                        ...prev,
+                        team: myTeamId
+                    }));
+
+                } else {
+                    // ADMIN
+                    setAgents(allUsers.filter(u => u.role === "AGENT"));
+                }
+
+            } catch (err) {
+                console.error(err);
+            }
+        };
+
+        if (show) loadData();
+
+    }, [show]);
+
+    // ======================
+    // HANDLE CHANGE
     // ======================
     const handleChange = (e) => {
         setFormData({
@@ -48,33 +109,57 @@ const CreateTicketModal = ({ show, onHide, onSuccess }) => {
     // SUBMIT
     // ======================
     const handleSubmit = async () => {
+
+        if (!formData.customer_name || !formData.title) {
+            alert("Customer name and title required");
+            return;
+        }
+
+        let payload = {
+            ...formData
+        };
+
+        // ADMIN LOGIC
+        if (user.role === "ADMIN") {
+
+            if (mode === "team") {
+                payload.assigned_to = null;
+            }
+
+            if (mode === "agent" && !formData.assigned_to) {
+                alert("Select agent");
+                return;
+            }
+        }
+
+        // TEAM LEAD LOGIC (ONLY AGENT)
+        if (user.role === "TEAM_LEAD") {
+
+            if (!formData.assigned_to) {
+                alert("Select agent");
+                return;
+            }
+
+            payload.team = user.team;
+        }
+
         try {
             setLoading(true);
 
-            await createTicket(formData);
+            await createTicket(payload);
 
-            setFormData({
-                customer_name: "",
-                customer_contact: "",
-                channel: "WEB",
-                title: "",
-                description: "",
-                priority: "MEDIUM",
-                team: ""
-            });
+            onSuccess?.();
+            onHide?.();
 
-            onSuccess();
-            onHide();
-
-        } catch (error) {
-            console.error("Ticket creation failed", error);
+        } catch (err) {
+            console.error(err?.response?.data || err);
         } finally {
             setLoading(false);
         }
     };
 
     return (
-        <Modal show={show} onHide={onHide} size="lg">
+        <Modal show={show} onHide={onHide} size="lg" centered>
 
             <Modal.Header closeButton>
                 <Modal.Title>Create Ticket</Modal.Title>
@@ -112,7 +197,6 @@ const CreateTicketModal = ({ show, onHide, onSuccess }) => {
                         <option value="EMAIL">EMAIL</option>
                         <option value="PHONE">PHONE</option>
                         <option value="CHAT">CHAT</option>
-                        <option value="WALKIN">WALK-IN</option>
                     </Form.Select>
 
                     {/* TITLE */}
@@ -147,21 +231,60 @@ const CreateTicketModal = ({ show, onHide, onSuccess }) => {
                         <option value="CRITICAL">CRITICAL</option>
                     </Form.Select>
 
-                    {/* TEAM ASSIGNMENT (🔥 NEW IMPORTANT FIELD) */}
-                    <Form.Select
-                        className="mt-2"
-                        name="team"
-                        value={formData.team}
-                        onChange={handleChange}
-                    >
-                        <option value="">-- Select Team --</option>
+                    {/* ===================== */}
+                    {/* ADMIN ONLY MODE SWITCH */}
+                    {/* ===================== */}
+                    {user.role === "ADMIN" && (
+                        <Form.Select
+                            className="mt-2"
+                            value={mode}
+                            onChange={(e) => setMode(e.target.value)}
+                        >
+                            <option value="agent">Assign to Agent</option>
+                            <option value="team">Assign to Team</option>
+                        </Form.Select>
+                    )}
 
-                        {teams.map(team => (
-                            <option key={team.id} value={team.id}>
-                                {team.name}
-                            </option>
-                        ))}
-                    </Form.Select>
+                    {/* ===================== */}
+                    {/* TEAM LEAD → ONLY AGENT */}
+                    {/* ===================== */}
+                    {(user.role === "ADMIN" && mode === "agent") ||
+                        user.role === "TEAM_LEAD" ? (
+                        <Form.Select
+                            className="mt-2"
+                            name="assigned_to"
+                            value={formData.assigned_to}
+                            onChange={handleChange}
+                        >
+                            <option value="">Select Agent</option>
+
+                            {agents.map(agent => (
+                                <option key={agent.id} value={agent.id}>
+                                    {agent.first_name} {agent.last_name}
+                                </option>
+                            ))}
+                        </Form.Select>
+                    ) : null}
+
+                    {/* ===================== */}
+                    {/* ADMIN TEAM SELECT */}
+                    {/* ===================== */}
+                    {user.role === "ADMIN" && mode === "team" && (
+                        <Form.Select
+                            className="mt-2"
+                            name="team"
+                            value={formData.team}
+                            onChange={handleChange}
+                        >
+                            <option value="">Select Team</option>
+
+                            {teams.map(team => (
+                                <option key={team.id} value={team.id}>
+                                    {team.name}
+                                </option>
+                            ))}
+                        </Form.Select>
+                    )}
 
                 </Form>
 

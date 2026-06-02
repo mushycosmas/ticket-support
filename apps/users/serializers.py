@@ -39,6 +39,7 @@ class UserSerializer(serializers.ModelSerializer):
             'phone',
             'role',
             'team',
+            'team_id', 
             'team_name',
             'is_active',
             'date_joined',

@@ -6,7 +6,6 @@ from django.contrib.auth import get_user_model
 
 from .models import Ticket
 from .serializers import TicketSerializer
-from .services import TicketWorkflow
 
 User = get_user_model()
 
@@ -16,7 +15,7 @@ class TicketViewSet(viewsets.ModelViewSet):
     serializer_class = TicketSerializer
 
     # =========================
-    # ROLE-BASED QUERYSET
+    # QUERYSET (ROLE BASED)
     # =========================
     def get_queryset(self):
         user = self.request.user
@@ -26,28 +25,27 @@ class TicketViewSet(viewsets.ModelViewSet):
             "assigned_to"
         ).order_by("-id")
 
-        # NOT AUTHENTICATED
         if not user or not user.is_authenticated:
             return Ticket.objects.none()
 
-        # ADMIN → ALL TICKETS
+        # ADMIN → ALL
         if user.role == "ADMIN":
             return queryset
 
-        # TEAM LEAD → ONLY TEAM TICKETS
+        # TEAM LEAD → ONLY THEIR TEAM
         if user.role == "TEAM_LEAD":
             if user.team_id:
                 return queryset.filter(team_id=user.team_id)
             return Ticket.objects.none()
 
-        # AGENT → ONLY ASSIGNED TICKETS
+        # AGENT → ONLY ASSIGNED
         if user.role == "AGENT":
             return queryset.filter(assigned_to=user)
 
         return Ticket.objects.none()
 
     # =========================
-    # ASSIGN TICKET
+    # ASSIGN TICKET (ADMIN + TEAM LEAD)
     # =========================
     @action(detail=True, methods=["post"])
     def assign(self, request, pk=None):
@@ -56,85 +54,123 @@ class TicketViewSet(viewsets.ModelViewSet):
         ticket = self.get_object()
 
         agent_id = request.data.get("assigned_to")
-        
-      
-        # VALIDATION
-        if not agent_id:
-            return Response(
-                {"error": "assigned_to is required"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        team_id = request.data.get("team_id")
 
-        # GET AGENT
-        try:
-            agent = User.objects.get(id=int(agent_id), role="AGENT")
-        except User.DoesNotExist:
+        # MUST HAVE AT LEAST ONE
+        if not agent_id and not team_id:
             return Response(
-                {"error": "Invalid agent"},
+                {"error": "assigned_to or team_id is required"},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
         # =========================
-        # TEAM LEAD RULES
+        # ADMIN CAN ASSIGN ANYTHING
+        # =========================
+        if user.role == "ADMIN":
+
+            # ASSIGN TO TEAM
+            if team_id:
+                ticket.team_id = team_id
+                ticket.assigned_to = None
+                ticket.status = "OPEN"
+                ticket.save()
+
+                return Response({
+                    "message": "Ticket assigned to team",
+                    "team_id": ticket.team_id,
+                    "status": ticket.status
+                })
+
+            # ASSIGN TO AGENT
+            if agent_id:
+                try:
+                    agent = User.objects.get(id=int(agent_id), role="AGENT")
+                except User.DoesNotExist:
+                    return Response(
+                        {"error": "Invalid agent"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+                ticket.assigned_to = agent
+                ticket.status = "IN_PROGRESS"
+                ticket.save()
+
+                return Response({
+                    "message": "Ticket assigned to agent",
+                    "assigned_to": agent.id,
+                    "status": ticket.status
+                })
+
+        # =========================
+        # TEAM LEAD (ONLY AGENT IN TEAM)
         # =========================
         if user.role == "TEAM_LEAD":
 
-            # must have team
             if not user.team_id:
                 return Response(
                     {"error": "No team assigned"},
                     status=status.HTTP_403_FORBIDDEN
                 )
 
-            # agent must be in same team
+            if not agent_id:
+                return Response(
+                    {"error": "assigned_to required"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            try:
+                agent = User.objects.get(id=int(agent_id), role="AGENT")
+            except User.DoesNotExist:
+                return Response(
+                    {"error": "Invalid agent"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
             if agent.team_id != user.team_id:
                 return Response(
-                    {"error": "You can only assign agents from your team"},
+                    {"error": "Not your team agent"},
                     status=status.HTTP_403_FORBIDDEN
                 )
 
-            # ticket must belong to same team
             if ticket.team_id != user.team_id:
                 return Response(
-                    {"error": "You can only assign tickets from your team"},
+                    {"error": "Not your team ticket"},
                     status=status.HTTP_403_FORBIDDEN
                 )
 
-        # =========================
-        # ASSIGN TICKET
-        # =========================
-        ticket.assigned_to = agent
-        ticket.status = "IN_PROGRESS"
-        ticket.save()
+            ticket.assigned_to = agent
+            ticket.status = "IN_PROGRESS"
+            ticket.save()
 
-        return Response({
-            "message": "Ticket assigned successfully",
-            "assigned_to": agent.id,
-            "status": ticket.status
-        })
+            return Response({
+                "message": "Ticket assigned successfully",
+                "assigned_to": agent.id,
+                "status": ticket.status
+            })
 
-    # =========================
-    # START PROGRESS
-    # =========================
-    @action(detail=True, methods=["post"])
-    def start(self, request, pk=None):
-
-        ticket = self.get_object()
-        TicketWorkflow.start_progress(ticket)
-
-        return Response({
-            "message": "Work started",
-            "status": ticket.status
-        })
+        return Response({"error": "Not allowed"}, status=status.HTTP_403_FORBIDDEN)
 
     # =========================
-    # RESOLVE
+    # RESOLVE (AGENT OWNER ONLY)
     # =========================
     @action(detail=True, methods=["post"])
     def resolve(self, request, pk=None):
 
+        user = request.user
         ticket = self.get_object()
-        TicketWorkflow.resolve(ticket)
+
+        if not user or not user.is_authenticated:
+            return Response({"error": "Unauthorized"}, status=401)
+
+        if user.role == "AGENT":
+            if ticket.assigned_to_id != user.id:
+                return Response(
+                    {"error": "Not your ticket"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+        ticket.status = "RESOLVED"
+        ticket.save()
 
         return Response({
             "message": "Ticket resolved",
@@ -142,58 +178,27 @@ class TicketViewSet(viewsets.ModelViewSet):
         })
 
     # =========================
-    # CLOSE
+    # CLOSE (ADMIN + TEAM LEAD)
     # =========================
     @action(detail=True, methods=["post"])
     def close(self, request, pk=None):
 
+        user = request.user
         ticket = self.get_object()
-        TicketWorkflow.close(ticket)
+
+        if not user or not user.is_authenticated:
+            return Response({"error": "Unauthorized"}, status=401)
+
+        if user.role not in ["ADMIN", "TEAM_LEAD"]:
+            return Response(
+                {"error": "Not allowed"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        ticket.status = "CLOSED"
+        ticket.save()
 
         return Response({
             "message": "Ticket closed",
             "status": ticket.status
         })
-@action(detail=True, methods=["post"])
-def resolve(self, request, pk=None):
-
-    user = request.user
-    ticket = self.get_object()
-
-    if not user.is_authenticated:
-        return Response({"error": "Unauthorized"}, status=401)
-
-    # AGENT RULE
-    if user.role == "AGENT":
-        if ticket.assigned_to != user:
-            return Response({"error": "Not your ticket"}, status=403)
-
-    ticket.status = "RESOLVED"
-    ticket.save()
-
-    return Response({
-        "message": "Ticket resolved",
-        "status": ticket.status
-    })
-
-
-@action(detail=True, methods=["post"])
-def close(self, request, pk=None):
-
-    user = request.user
-    ticket = self.get_object()
-
-    if not user.is_authenticated:
-        return Response({"error": "Unauthorized"}, status=401)
-
-    # ONLY ADMIN or TEAM LEAD can close
-    if user.role not in ["ADMIN", "TEAM_LEAD"]:
-        return Response({"error": "Not allowed"}, status=403)
-
-    ticket.status = "CLOSED"
-    ticket.save()
-
-    return Response({
-        "message": "Ticket closed",
-        "status": ticket.status
-    })

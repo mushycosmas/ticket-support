@@ -1,83 +1,167 @@
 import React, { useEffect, useState } from "react";
 import { Form, Button, Spinner } from "react-bootstrap";
+
 import { assignTicket } from "../../api/ticketApi";
 import { getUsers } from "../../api/userApi";
+import { getTeams } from "../../api/teamApi";
 
-const AssignTicketForm = ({ ticket, ticketId, onSuccess }) => {
+const AssignTicketForm = ({ ticket, ticketId, onSuccess, onClose }) => {
+
+    const user = JSON.parse(localStorage.getItem("user"));
 
     const [agents, setAgents] = useState([]);
-    const [agentId, setAgentId] = useState("");
+    const [teams, setTeams] = useState([]);
+
     const [loading, setLoading] = useState(false);
 
+    const [mode, setMode] = useState("agent");
+    const [agentId, setAgentId] = useState("");
+    const [teamId, setTeamId] = useState("");
+
     // =====================
-    // LOAD TEAM AGENTS
+    // LOAD USERS + FILTER
     // =====================
-    useEffect(() => {
+  useEffect(() => {
 
-        const loadTeamAgents = async () => {
+    const loadData = async () => {
+        try {
+            const [usersRes, teamsRes] = await Promise.all([
+                getUsers(),
+                getTeams()
+            ]);
 
-            try {
-                const res = await getUsers();
+            const allUsers = usersRes.data;
 
-                const teamId = ticket?.team;
+            const ticketTeamId =
+                ticket?.team_id ??
+                ticket?.team?.id ??
+                ticket?.team;
 
-                const teamAgents = res.data.filter(user =>
-                    user.role === "AGENT" &&
-                    Number(user.team) === Number(teamId)
-                );
-
-                setAgents(teamAgents);
-
-            } catch (err) {
-                console.error("Failed to load team agents", err);
+            if (!ticketTeamId) {
+                console.warn("Ticket team is missing:", ticket);
+                return;
             }
-        };
 
-        if (ticket?.team) {
-            loadTeamAgents();
+            const teamAgents = allUsers.filter(u =>
+                u.role === "AGENT" &&
+                Number(u.team_id) === Number(ticketTeamId)
+            );
+
+            setAgents(teamAgents);
+            setTeams(teamsRes.data);
+
+        } catch (err) {
+            console.error("Failed loading assign data", err);
         }
+    };
 
-    }, [ticket]);
-
-    // =====================
-    // ASSIGN
-    // =====================
-  const handleAssign = async () => {
-
-    console.log("agentId =", agentId);
-
-    if (!agentId) {
-        alert("Please select an agent");
-        return;
+    if (ticket) {
+        loadData();
     }
 
-    try {
-        setLoading(true);
+}, [ticket]);
 
-        await assignTicket(ticketId, {
-            assigned_to: Number(agentId)
-        });
+    // =====================
+    // ASSIGN HANDLER
+    // =====================
+    const handleAssign = async () => {
 
-        onSuccess();
+        if (loading) return;
 
-    } catch (err) {
-        console.error(err.response?.data);
-    } finally {
-        setLoading(false);
-    }
-};
+        let payload = {};
+
+        try {
+            setLoading(true);
+
+            // =====================
+            // ADMIN
+            // =====================
+            if (user.role === "ADMIN") {
+
+                if (mode === "team") {
+                    if (!teamId) return alert("Select team");
+
+                    payload = {
+                        team_id: Number(teamId)
+                    };
+
+                } else {
+                    if (!agentId) return alert("Select agent");
+
+                    payload = {
+                        assigned_to: Number(agentId)
+                    };
+                }
+            }
+
+            // =====================
+            // TEAM LEAD (ONLY AGENT)
+            // =====================
+            if (user.role === "TEAM_LEAD") {
+
+                if (!agentId) return alert("Select agent");
+
+                payload = {
+                    assigned_to: Number(agentId)
+                };
+            }
+
+            await assignTicket(ticketId, payload);
+
+            setAgentId("");
+            setTeamId("");
+
+            onSuccess?.();
+            onClose?.();
+
+        } catch (err) {
+            console.error(err.response?.data || err);
+        } finally {
+            setLoading(false);
+        }
+    };
+
     return (
         <div className="mt-3">
 
-            <Form.Label>Assign Agent (Team Only)</Form.Label>
+            <h6 className="mb-2">Assign Ticket</h6>
 
-            <div className="d-flex gap-2">
-
+            {/* ADMIN MODE SWITCH */}
+            {user.role === "ADMIN" && (
                 <Form.Select
+                    className="mb-2"
+                    value={mode}
+                    onChange={(e) => setMode(e.target.value)}
+                >
+                    <option value="agent">Assign to Agent</option>
+                    <option value="team">Assign to Team</option>
+                </Form.Select>
+            )}
+
+            {/* TEAM SELECT (ADMIN ONLY) */}
+            {user.role === "ADMIN" && mode === "team" && (
+                <Form.Select
+                    className="mb-2"
+                    value={teamId}
+                    onChange={(e) => setTeamId(e.target.value)}
+                >
+                    <option value="">Select Team</option>
+                    {teams.map(team => (
+                        <option key={team.id} value={team.id}>
+                            {team.name}
+                        </option>
+                    ))}
+                </Form.Select>
+            )}
+
+            {/* AGENT SELECT (ADMIN + TEAM LEAD FILTERED) */}
+            {(mode === "agent" || user.role === "TEAM_LEAD") && (
+                <Form.Select
+                    className="mb-2"
                     value={agentId}
                     onChange={(e) => setAgentId(e.target.value)}
                 >
-                    <option value="">-- Select Agent --</option>
+                    <option value="">Select Agent</option>
 
                     {agents.map(agent => (
                         <option key={agent.id} value={agent.id}>
@@ -85,15 +169,16 @@ const AssignTicketForm = ({ ticket, ticketId, onSuccess }) => {
                         </option>
                     ))}
                 </Form.Select>
+            )}
 
-                <Button
-                    onClick={handleAssign}
-                    disabled={loading}
-                >
-                    {loading ? <Spinner size="sm" /> : "Assign"}
-                </Button>
+            {/* BUTTON */}
+            <Button
+                onClick={handleAssign}
+                disabled={loading}
+            >
+                {loading ? <Spinner size="sm" /> : "Assign Ticket"}
+            </Button>
 
-            </div>
         </div>
     );
 };
