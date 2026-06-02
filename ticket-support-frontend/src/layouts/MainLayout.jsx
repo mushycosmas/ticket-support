@@ -1,9 +1,11 @@
 import React from "react";
+import { Outlet } from "react-router-dom";
+
 import Header from "./partials/Header";
 import Sidebar from "./partials/Sidebar";
 import Footer from "./partials/Footer";
 
-const MainLayout = ({ children }) => {
+const MainLayout = () => {
     return (
         <div className="d-flex flex-column vh-100">
 
@@ -17,7 +19,7 @@ const MainLayout = ({ children }) => {
 
                 {/* MAIN CONTENT */}
                 <main className="flex-grow-1 p-3 bg-light">
-                    {children}
+                    <Outlet />   {/* 🔥 FIX IS HERE */}
                 </main>
 
             </div>

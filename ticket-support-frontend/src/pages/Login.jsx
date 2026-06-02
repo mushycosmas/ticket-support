@@ -15,13 +15,19 @@ const Login = () => {
 
     const navigate = useNavigate();
 
+    // ======================
+    // HANDLE INPUT
+    // ======================
     const handleChange = (e) => {
-        setForm({
-            ...form,
+        setForm((prev) => ({
+            ...prev,
             [e.target.name]: e.target.value
-        });
+        }));
     };
 
+    // ======================
+    // LOGIN SUBMIT
+    // ======================
     const handleSubmit = async (e) => {
         e.preventDefault();
 
@@ -42,34 +48,27 @@ const Login = () => {
             // ======================
             // ROLE-BASED ROUTING
             // ======================
-            switch (user.role) {
+            if (user.role === "ADMIN") {
+                navigate("/admin/users", { replace: true });
 
-                case "ADMIN":
-                    navigate("/admin/users");
-                    break;
+            } else if (user.role === "MANAGER") {
+                navigate("/dashboard", { replace: true });
 
-                case "MANAGER":
-                    navigate("/dashboard");
-                    break;
+            } else if (user.role === "TEAM_LEAD") {
+                navigate("/tickets", { replace: true });
 
-                case "TEAM_LEAD":
-                    navigate("/tickets");
-                    break;
+            } else if (user.role === "AGENT") {
+                navigate("/tickets", { replace: true });
 
-                case "AGENT":
-                    navigate("/tickets");
-                    break;
+            } else if (user.role === "CUSTOMER") {
+                navigate("/tickets", { replace: true });
 
-                case "CUSTOMER":
-                    navigate("/tickets");
-                    break;
-
-                default:
-                    navigate("/dashboard");
+            } else {
+                navigate("/dashboard", { replace: true });
             }
 
         } catch (err) {
-            console.error("Login failed", err);
+            console.error("Login failed:", err);
             setError("Invalid username or password");
         } finally {
             setLoading(false);
@@ -77,32 +76,38 @@ const Login = () => {
     };
 
     return (
-        <div className="d-flex justify-content-center align-items-center" style={{ height: "100vh" }}>
+        <div className="d-flex justify-content-center align-items-center vh-100">
 
-            <Card style={{ width: "400px" }} className="p-3">
+            <Card style={{ width: "400px" }} className="p-4 shadow-sm">
 
                 <h4 className="text-center mb-3">Login</h4>
 
-                {error && <Alert variant="danger">{error}</Alert>}
+                {error && (
+                    <Alert variant="danger">
+                        {error}
+                    </Alert>
+                )}
 
                 <Form onSubmit={handleSubmit}>
 
-                    <Form.Control
-                        className="mb-2"
-                        name="username"
-                        placeholder="Username"
-                        onChange={handleChange}
-                        value={form.username}
-                    />
+                    <Form.Group className="mb-2">
+                        <Form.Control
+                            name="username"
+                            placeholder="Username"
+                            value={form.username}
+                            onChange={handleChange}
+                        />
+                    </Form.Group>
 
-                    <Form.Control
-                        className="mb-3"
-                        type="password"
-                        name="password"
-                        placeholder="Password"
-                        onChange={handleChange}
-                        value={form.password}
-                    />
+                    <Form.Group className="mb-3">
+                        <Form.Control
+                            type="password"
+                            name="password"
+                            placeholder="Password"
+                            value={form.password}
+                            onChange={handleChange}
+                        />
+                    </Form.Group>
 
                     <Button
                         type="submit"

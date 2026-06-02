@@ -18,13 +18,12 @@ function AppRoutes() {
 
             <Routes>
 
-                {/* ===================== */}
-                {/* DEFAULT PAGE = LOGIN */}
-                {/* ===================== */}
-                <Route path="/" element={<Login />} />
+                {/* LOGIN */}
+                <Route path="/login" element={<Login />} />
+                <Route path="/" element={<Navigate to="/login" replace />} />
 
                 {/* ===================== */}
-                {/* PROTECTED APP */}
+                {/* PROTECTED LAYOUT WRAPPER */}
                 {/* ===================== */}
                 <Route
                     element={
@@ -34,6 +33,7 @@ function AppRoutes() {
                     }
                 >
 
+                    {/* CHILD ROUTES GO HERE */}
                     <Route path="/dashboard" element={<Dashboard />} />
                     <Route path="/tickets" element={<Tickets />} />
                     <Route path="/tickets/:id" element={<TicketDetails />} />
@@ -44,7 +44,7 @@ function AppRoutes() {
                 </Route>
 
                 {/* fallback */}
-                <Route path="*" element={<Navigate to="/" />} />
+                <Route path="*" element={<Navigate to="/login" replace />} />
 
             </Routes>
 
