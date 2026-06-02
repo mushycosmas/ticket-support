@@ -14,22 +14,38 @@ from .serializers import UserSerializer, TeamSerializer
 # =========================
 class UserViewSet(viewsets.ModelViewSet):
 
-    queryset = User.objects.select_related('team').all()
     serializer_class = UserSerializer
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        user = self.request.user
 
-        team_id = self.request.query_params.get('team')
-        role = self.request.query_params.get('role')
+        if not user or not user.is_authenticated:
+            return User.objects.none()
 
-        if team_id:
-            queryset = queryset.filter(team_id=team_id)
+        queryset = User.objects.select_related("team").all()
 
-        if role:
-            queryset = queryset.filter(role=role)
+        # =========================
+        # ADMIN → ALL USERS
+        # =========================
+        if user.role == "ADMIN":
+            return queryset
 
-        return queryset
+        # =========================
+        # TEAM LEAD → ONLY AGENTS IN THEIR TEAM
+        # =========================
+        if user.role == "TEAM_LEAD":
+            return queryset.filter(
+                team=user.team,
+                role="AGENT"   # 🔥 IMPORTANT: only agents
+            )
+
+        # =========================
+        # AGENT → ONLY SELF
+        # =========================
+        if user.role == "AGENT":
+            return queryset.filter(id=user.id)
+
+        return User.objects.none()
 
     # =========================
     # RESET PASSWORD ACTION

@@ -1,13 +1,20 @@
 import React, { useEffect, useState } from "react";
 import { Card, Table, Button, Badge, Spinner } from "react-bootstrap";
 
-import { getTickets, deleteTicket } from "../api/ticketApi";
+import {
+    getTickets,
+    deleteTicket,
+    resolveTicket,
+    closeTicket
+} from "../api/ticketApi";
 
 import CreateTicketModal from "../components/tickets/CreateTicketModal";
 import TicketViewModal from "../components/tickets/TicketViewModal";
 import ConfirmModal from "../components/common/ConfirmModal";
 
 const Tickets = () => {
+
+    const user = JSON.parse(localStorage.getItem("user"));
 
     const [tickets, setTickets] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -17,32 +24,62 @@ const Tickets = () => {
 
     const [selectedTicket, setSelectedTicket] = useState(null);
 
-    // NEW: delete modal state
     const [showDelete, setShowDelete] = useState(false);
     const [deleteId, setDeleteId] = useState(null);
 
+    // =====================
+    // LOAD TICKETS
+    // =====================
     const loadTickets = async () => {
         setLoading(true);
-        const res = await getTickets();
-        setTickets(res.data);
-        setLoading(false);
+        try {
+            const res = await getTickets();
+            setTickets(res.data);
+        } finally {
+            setLoading(false);
+        }
     };
 
     useEffect(() => {
         loadTickets();
     }, []);
 
-    // open confirm modal
+    // =====================
+    // DELETE
+    // =====================
     const confirmDelete = (id) => {
         setDeleteId(id);
         setShowDelete(true);
     };
 
-    // actual delete
     const handleDelete = async () => {
         await deleteTicket(deleteId);
         setDeleteId(null);
         loadTickets();
+    };
+
+    // =====================
+    // WORKFLOW ACTIONS
+    // =====================
+    const handleResolve = async (id) => {
+        await resolveTicket(id);
+        loadTickets();
+    };
+
+    const handleClose = async (id) => {
+        await closeTicket(id);
+        loadTickets();
+    };
+
+    // =====================
+    // ROLE HELPERS
+    // =====================
+    const isAgentOwner = (ticket) => {
+        return user?.role === "AGENT" && ticket.assigned_to === user?.id;
+    };
+
+    const canClose = () => {
+        return user?.role === "ADMIN" || user?.role === "TEAM_LEAD";
     };
 
     return (
@@ -51,13 +88,13 @@ const Tickets = () => {
             {/* HEADER */}
             <Card className="mb-3">
                 <Card.Body className="d-flex justify-content-between">
-
                     <h4>Tickets</h4>
 
-                    <Button onClick={() => setShowCreate(true)}>
-                        + Create Ticket
-                    </Button>
-
+                    {(user?.role === "ADMIN" || user?.role === "TEAM_LEAD") && (
+                        <Button onClick={() => setShowCreate(true)}>
+                            + Create Ticket
+                        </Button>
+                    )}
                 </Card.Body>
             </Card>
 
@@ -93,11 +130,11 @@ const Tickets = () => {
                                             </Badge>
                                         </td>
 
-                                        <td>
+                                        <td className="d-flex gap-1 flex-wrap">
 
+                                            {/* VIEW */}
                                             <Button
                                                 size="sm"
-                                                className="me-2"
                                                 onClick={() => {
                                                     setSelectedTicket(t);
                                                     setShowView(true);
@@ -106,13 +143,42 @@ const Tickets = () => {
                                                 View
                                             </Button>
 
-                                            <Button
-                                                size="sm"
-                                                variant="danger"
-                                                onClick={() => confirmDelete(t.id)}
-                                            >
-                                                Delete
-                                            </Button>
+                                            {/* DELETE (ADMIN ONLY) */}
+                                            {user?.role === "ADMIN" && (
+                                                <Button
+                                                    size="sm"
+                                                    variant="danger"
+                                                    onClick={() => confirmDelete(t.id)}
+                                                >
+                                                    Delete
+                                                </Button>
+                                            )}
+
+                                            {/* ===================== */}
+                                            {/* AGENT ACTIONS */}
+                                            {/* ===================== */}
+                                            {isAgentOwner(t) && t.status === "IN_PROGRESS" && (
+                                                <Button
+                                                    size="sm"
+                                                    variant="warning"
+                                                    onClick={() => handleResolve(t.id)}
+                                                >
+                                                    Resolve
+                                                </Button>
+                                            )}
+
+                                            {/* ===================== */}
+                                            {/* CLOSE ACTION */}
+                                            {/* ===================== */}
+                                            {canClose() && t.status === "RESOLVED" && (
+                                                <Button
+                                                    size="sm"
+                                                    variant="success"
+                                                    onClick={() => handleClose(t.id)}
+                                                >
+                                                    Close
+                                                </Button>
+                                            )}
 
                                         </td>
 
@@ -140,12 +206,11 @@ const Tickets = () => {
                 onRefresh={loadTickets}
             />
 
-            {/* DELETE CONFIRM MODAL */}
             <ConfirmModal
                 show={showDelete}
                 onHide={() => setShowDelete(false)}
                 title="Delete Ticket"
-                message="Are you sure you want to delete this ticket? This action cannot be undone."
+                message="Are you sure you want to delete this ticket?"
                 onConfirm={handleDelete}
             />
 
