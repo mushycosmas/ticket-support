@@ -28,21 +28,41 @@ class TicketViewSet(viewsets.ModelViewSet):
         if not user or not user.is_authenticated:
             return Ticket.objects.none()
 
-        # ADMIN → ALL
+        # ------------------------
+        # ROLE BASE FILTER
+        # ------------------------
         if user.role == "ADMIN":
-            return queryset
+            qs = queryset
 
-        # TEAM LEAD → ONLY THEIR TEAM
-        if user.role == "TEAM_LEAD":
-            if user.team_id:
-                return queryset.filter(team_id=user.team_id)
+        elif user.role == "TEAM_LEAD":
+            qs = queryset.filter(team_id=user.team_id) if user.team_id else Ticket.objects.none()
+
+        elif user.role == "AGENT":
+            qs = queryset.filter(assigned_to=user)
+
+        else:
             return Ticket.objects.none()
 
-        # AGENT → ONLY ASSIGNED
-        if user.role == "AGENT":
-            return queryset.filter(assigned_to=user)
+        # ------------------------
+        # EXTRA FILTER (FRONTEND CONTROL)
+        # ------------------------
+        filter_type = self.request.query_params.get("filter")
 
-        return Ticket.objects.none()
+        if filter_type == "my":
+            qs = qs.filter(created_by=user)
+
+        elif filter_type == "assigned":
+            qs = qs.exclude(assigned_to=None)
+
+        elif filter_type == "unassigned":
+            qs = qs.filter(assigned_to=None)
+
+        elif filter_type == "closed":
+            qs = qs.filter(status="CLOSED")
+
+        return qs
+
+      
 
     # =========================
     # ASSIGN TICKET (ADMIN + TEAM LEAD)

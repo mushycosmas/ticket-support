@@ -31,3 +31,16 @@ export const closeTicket = (id) =>
 
 export const assignTicket = (id, data) =>
     api.post(`/tickets/tickets/${id}/assign/`, data);
+
+
+export const getMyTickets = () =>
+    api.get("/tickets/tickets/?filter=my");
+
+export const getAssignedTickets = () =>
+    api.get("/tickets/tickets/?filter=assigned");
+
+export const getUnassignedTickets = () =>
+    api.get("/tickets/tickets/?filter=unassigned");
+
+export const getClosedTickets = () =>
+    api.get("/tickets/tickets/?filter=closed");

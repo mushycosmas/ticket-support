@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Modal, Form, Button, Spinner } from "react-bootstrap";
+
 import { createTicket } from "../../api/ticketApi";
 import { getTeams } from "../../api/teamApi";
 import { getUsers } from "../../api/userApi";
@@ -12,7 +13,7 @@ const CreateTicketModal = ({ show, onHide, onSuccess }) => {
     const [teams, setTeams] = useState([]);
     const [agents, setAgents] = useState([]);
 
-    const [mode, setMode] = useState("agent"); // admin only: agent | team
+    const [mode, setMode] = useState("agent");
 
     const [formData, setFormData] = useState({
         customer_name: "",
@@ -62,41 +63,43 @@ const CreateTicketModal = ({ show, onHide, onSuccess }) => {
                 setTeams(allTeams);
 
                 // ======================
-                // ROLE FILTERING
+                // ROLE-BASED FILTER (FIXED)
                 // ======================
+
                 if (user.role === "TEAM_LEAD") {
 
                     const myTeamId = user.team;
 
-                    setAgents(
-                        allUsers.filter(
-                            u =>
-                                u.role === "AGENT" &&
-                                Number(u.team_id) === Number(myTeamId)
-                        )
+                    const teamAgents = allUsers.filter(
+                        u =>
+                            u.role === "AGENT" &&
+                            Number(u.team_id) === Number(myTeamId)
                     );
+
+                    setAgents(teamAgents);
 
                     setFormData(prev => ({
                         ...prev,
                         team: myTeamId
                     }));
+                }
 
-                } else {
-                    // ADMIN
+                else {
+                    // ADMIN sees all agents
                     setAgents(allUsers.filter(u => u.role === "AGENT"));
                 }
 
             } catch (err) {
-                console.error(err);
+                console.error("Failed loading data", err);
             }
         };
 
         if (show) loadData();
 
-    }, [show]);
+    }, [show, user.role, user.team]);
 
     // ======================
-    // HANDLE CHANGE
+    // HANDLE INPUT
     // ======================
     const handleChange = (e) => {
         setFormData({
@@ -119,7 +122,9 @@ const CreateTicketModal = ({ show, onHide, onSuccess }) => {
             ...formData
         };
 
+        // ======================
         // ADMIN LOGIC
+        // ======================
         if (user.role === "ADMIN") {
 
             if (mode === "team") {
@@ -132,7 +137,9 @@ const CreateTicketModal = ({ show, onHide, onSuccess }) => {
             }
         }
 
-        // TEAM LEAD LOGIC (ONLY AGENT)
+        // ======================
+        // TEAM LEAD LOGIC
+        // ======================
         if (user.role === "TEAM_LEAD") {
 
             if (!formData.assigned_to) {
@@ -169,7 +176,6 @@ const CreateTicketModal = ({ show, onHide, onSuccess }) => {
 
                 <Form>
 
-                    {/* CUSTOMER */}
                     <Form.Control
                         className="mb-2"
                         name="customer_name"
@@ -186,7 +192,6 @@ const CreateTicketModal = ({ show, onHide, onSuccess }) => {
                         onChange={handleChange}
                     />
 
-                    {/* CHANNEL */}
                     <Form.Select
                         className="mb-2"
                         name="channel"
@@ -199,7 +204,6 @@ const CreateTicketModal = ({ show, onHide, onSuccess }) => {
                         <option value="CHAT">CHAT</option>
                     </Form.Select>
 
-                    {/* TITLE */}
                     <Form.Control
                         className="mb-2"
                         name="title"
@@ -208,7 +212,6 @@ const CreateTicketModal = ({ show, onHide, onSuccess }) => {
                         onChange={handleChange}
                     />
 
-                    {/* DESCRIPTION */}
                     <Form.Control
                         as="textarea"
                         rows={3}
@@ -218,7 +221,6 @@ const CreateTicketModal = ({ show, onHide, onSuccess }) => {
                         onChange={handleChange}
                     />
 
-                    {/* PRIORITY */}
                     <Form.Select
                         className="mt-2"
                         name="priority"
@@ -231,9 +233,7 @@ const CreateTicketModal = ({ show, onHide, onSuccess }) => {
                         <option value="CRITICAL">CRITICAL</option>
                     </Form.Select>
 
-                    {/* ===================== */}
-                    {/* ADMIN ONLY MODE SWITCH */}
-                    {/* ===================== */}
+                    {/* ADMIN MODE SWITCH */}
                     {user.role === "ADMIN" && (
                         <Form.Select
                             className="mt-2"
@@ -245,11 +245,9 @@ const CreateTicketModal = ({ show, onHide, onSuccess }) => {
                         </Form.Select>
                     )}
 
-                    {/* ===================== */}
-                    {/* TEAM LEAD → ONLY AGENT */}
-                    {/* ===================== */}
-                    {(user.role === "ADMIN" && mode === "agent") ||
-                        user.role === "TEAM_LEAD" ? (
+                    {/* AGENT SELECT */}
+                    {(user.role === "TEAM_LEAD" ||
+                        (user.role === "ADMIN" && mode === "agent")) && (
                         <Form.Select
                             className="mt-2"
                             name="assigned_to"
@@ -264,11 +262,9 @@ const CreateTicketModal = ({ show, onHide, onSuccess }) => {
                                 </option>
                             ))}
                         </Form.Select>
-                    ) : null}
+                    )}
 
-                    {/* ===================== */}
-                    {/* ADMIN TEAM SELECT */}
-                    {/* ===================== */}
+                    {/* TEAM SELECT (ADMIN ONLY) */}
                     {user.role === "ADMIN" && mode === "team" && (
                         <Form.Select
                             className="mt-2"

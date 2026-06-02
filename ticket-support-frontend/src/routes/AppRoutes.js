@@ -1,30 +1,46 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 
 import MainLayout from "../layouts/MainLayout";
+import ProtectedRoute from "./ProtectedRoute";
 
+// Auth
 import Login from "../pages/Login";
-import Dashboard from "../pages/Dashboard";
-import Tickets from "../pages/Tickets";
-import TicketDetails from "../pages/TicketDetails";
 
+// Dashboard
+import Dashboard from "../pages/Dashboard";
+
+// Tickets
+import Tickets from "../pages/tickets/Tickets";
+import TicketDetails from "../pages/tickets/TicketDetails";
+
+// Admin
 import Users from "../pages/admin/Users";
 import Teams from "../pages/admin/Teams";
+import Categories from "../pages/admin/Categories";
+import Priorities from "../pages/admin/Priorities";
+import KnowledgeBase from "../pages/admin/KnowledgeBase";
 
-import ProtectedRoute from "../routes/ProtectedRoute";
+// Team Lead
+import TeamTickets from "../pages/team/TeamTickets";
+import TeamAgents from "../pages/team/TeamAgents";
+
+// Reports
+import Reports from "../pages/reports/Reports";
+import Analytics from "../pages/reports/Analytics";
+
+// System
+import Settings from "../pages/system/Settings";
+import SystemLogs from "../pages/system/SystemLogs";
 
 function AppRoutes() {
     return (
         <BrowserRouter>
-
             <Routes>
-
-                {/* LOGIN */}
+                {/* Public Routes */}
                 <Route path="/login" element={<Login />} />
-                <Route path="/" element={<Navigate to="/login" replace />} />
+                <Route path="/" element={<Navigate to="/dashboard" replace />} />
 
-                {/* ===================== */}
-                {/* PROTECTED LAYOUT WRAPPER */}
-                {/* ===================== */}
+                {/* Protected Routes */}
                 <Route
                     element={
                         <ProtectedRoute>
@@ -32,22 +48,48 @@ function AppRoutes() {
                         </ProtectedRoute>
                     }
                 >
-
-                    {/* CHILD ROUTES GO HERE */}
+                    {/* Dashboard */}
                     <Route path="/dashboard" element={<Dashboard />} />
-                    <Route path="/tickets" element={<Tickets />} />
-                    <Route path="/tickets/:id" element={<TicketDetails />} />
 
+                    {/* Tickets */}
+                    <Route path="/tickets" element={<Tickets />} />
+                    <Route path="/tickets/my" element={<Tickets />} />
+                    <Route path="/tickets/assigned" element={<Tickets />} />
+                    <Route path="/tickets/unassigned" element={<Tickets />} />
+                    <Route path="/tickets/open" element={<Tickets />} />
+                    <Route path="/tickets/in-progress" element={<Tickets />} />
+                    <Route path="/tickets/resolved" element={<Tickets />} />
+                    <Route path="/tickets/closed" element={<Tickets />} />
+
+                    {/* Team Lead */}
+                    <Route path="/team/tickets" element={<TeamTickets />} />
+                    <Route path="/team/agents" element={<TeamAgents />} />
+
+                    {/* Administration */}
                     <Route path="/admin/users" element={<Users />} />
                     <Route path="/admin/teams" element={<Teams />} />
+                    <Route path="/admin/categories" element={<Categories />} />
+                    <Route path="/admin/priorities" element={<Priorities />} />
+                    <Route
+                        path="/admin/knowledge-base"
+                        element={<KnowledgeBase />}
+                    />
 
+                    {/* Reports */}
+                    <Route path="/reports" element={<Reports />} />
+                    <Route path="/analytics" element={<Analytics />} />
+
+                    {/* System */}
+                    <Route path="/settings" element={<Settings />} />
+                    <Route path="/logs" element={<SystemLogs />} />
                 </Route>
 
-                {/* fallback */}
-                <Route path="*" element={<Navigate to="/login" replace />} />
-
+                {/* 404 */}
+                <Route
+                    path="*"
+                    element={<Navigate to="/dashboard" replace />}
+                />
             </Routes>
-
         </BrowserRouter>
     );
 }
