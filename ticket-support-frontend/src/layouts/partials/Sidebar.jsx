@@ -152,6 +152,27 @@ const Sidebar = () => {
                                 Knowledge Base
                             </Nav.Link> */}
                         </Nav>
+
+                         <div className="text-uppercase text-muted small fw-bold mb-2">
+                            Locations
+                        </div>
+
+                        <Nav className="flex-column mb-3">
+                            <Nav.Link as={Link} to="/admin/locations/regions">
+                                <Database className="me-2" />
+                                Regions
+                            </Nav.Link>
+
+                            <Nav.Link as={Link} to="/admin/locations/districts">
+                                <Database className="me-2" />
+                                Districts
+                            </Nav.Link>
+
+                            <Nav.Link as={Link} to="/admin/locations/wards">
+                                <Database className="me-2" />
+                                Wards
+                            </Nav.Link>
+                        </Nav>
                     </>
                 )}
 

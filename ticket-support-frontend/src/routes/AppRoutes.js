@@ -32,6 +32,11 @@ import Analytics from "../pages/reports/Analytics";
 import Settings from "../pages/system/Settings";
 import SystemLogs from "../pages/system/SystemLogs";
 
+//locations
+import Regions from "../pages/admin/locations/Regions";
+import Districts from "../pages/admin/locations/Districts";
+import Wards from "../pages/admin/locations/Wards";
+
 function AppRoutes() {
     return (
         <BrowserRouter>
@@ -70,6 +75,11 @@ function AppRoutes() {
                     <Route path="/admin/teams" element={<Teams />} />
                     <Route path="/admin/categories" element={<Categories />} />
                     <Route path="/admin/priorities" element={<Priorities />} />
+
+                    {/* Locations */}
+                    <Route path="/admin/locations/regions" element={<Regions />} />
+                    <Route path="/admin/locations/districts" element={<Districts />} />
+                    <Route path="/admin/locations/wards" element={<Wards />} />
                     <Route
                         path="/admin/knowledge-base"
                         element={<KnowledgeBase />}

@@ -32,6 +32,10 @@ urlpatterns = [
 
     # AUDIT LOGS
     path('api/audit/', include('apps.audit_logs.urls')),
+
+    # Locations
+     path('api/locations/', include('apps.locations.urls')),
+  
 ]
 
 if settings.DEBUG:

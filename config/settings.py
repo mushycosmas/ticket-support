@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'apps.reports',
     'apps.channels',
     'apps.audit_logs',
+    'apps.locations',
 ]
 
 
