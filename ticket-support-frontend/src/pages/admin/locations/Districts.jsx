@@ -98,7 +98,7 @@ const Districts = () => {
                         <tr key={d.id}>
                             <td>{i + 1}</td>
                             <td>{d.name}</td>
-                            <td>{d.region}</td>
+                            <td>{d.region_name}</td>
                             <td>
                                 <Button
                                     size="sm"

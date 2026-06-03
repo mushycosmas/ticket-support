@@ -98,7 +98,7 @@ const Wards = () => {
                         <tr key={w.id}>
                             <td>{i + 1}</td>
                             <td>{w.name}</td>
-                            <td>{w.district}</td>
+                            <td>{w.district_name}</td>
                             <td>
                                 <Button
                                     size="sm"
