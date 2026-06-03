@@ -35,6 +35,9 @@ urlpatterns = [
 
     # Locations
      path('api/locations/', include('apps.locations.urls')),
+
+     path('api/categories/', include('apps.categories.urls')),
+     path('api/priorities/', include('apps.priorities.urls')),
   
 ]
 

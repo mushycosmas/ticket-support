@@ -1,13 +1,15 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Table, Button, Modal, Form, Badge } from "react-bootstrap";
 
+import {
+  getCategories,
+  createCategory,
+  updateCategory,
+  deleteCategory,
+} from "../../api/categoryApi";
+
 const Categories = () => {
-  // Mock data (replace with API later)
-  const [categories, setCategories] = useState([
-    { id: 1, name: "Technical Issue", description: "System and bug issues", status: "Active" },
-    { id: 2, name: "Billing", description: "Payment and invoices", status: "Active" },
-    { id: 3, name: "Account", description: "User account problems", status: "Inactive" },
-  ]);
+  const [categories, setCategories] = useState([]);
 
   const [show, setShow] = useState(false);
   const [editMode, setEditMode] = useState(false);
@@ -19,14 +21,31 @@ const Categories = () => {
     status: "Active",
   });
 
-  // Open modal for create
+  // =====================
+  // LOAD DATA FROM API
+  // =====================
+  const fetchCategories = () => {
+    getCategories()
+      .then((res) => setCategories(res.data))
+      .catch((err) => console.log(err));
+  };
+
+  useEffect(() => {
+    fetchCategories();
+  }, []);
+
+  // =====================
+  // OPEN CREATE
+  // =====================
   const handleCreate = () => {
     setEditMode(false);
     setFormData({ name: "", description: "", status: "Active" });
     setShow(true);
   };
 
-  // Open modal for edit
+  // =====================
+  // OPEN EDIT
+  // =====================
   const handleEdit = (category) => {
     setEditMode(true);
     setCurrentId(category.id);
@@ -38,30 +57,36 @@ const Categories = () => {
     setShow(true);
   };
 
-  // Delete category
+  // =====================
+  // DELETE
+  // =====================
   const handleDelete = (id) => {
-    const filtered = categories.filter((cat) => cat.id !== id);
-    setCategories(filtered);
+    deleteCategory(id)
+      .then(() => fetchCategories())
+      .catch((err) => console.log(err));
   };
 
-  // Handle form submit
+  // =====================
+  // SUBMIT (CREATE / UPDATE)
+  // =====================
   const handleSubmit = (e) => {
     e.preventDefault();
 
     if (editMode) {
-      const updated = categories.map((cat) =>
-        cat.id === currentId ? { ...cat, ...formData } : cat
-      );
-      setCategories(updated);
+      updateCategory(currentId, formData)
+        .then(() => {
+          fetchCategories();
+          setShow(false);
+        })
+        .catch((err) => console.log(err));
     } else {
-      const newCategory = {
-        id: Date.now(),
-        ...formData,
-      };
-      setCategories([...categories, newCategory]);
+      createCategory(formData)
+        .then(() => {
+          fetchCategories();
+          setShow(false);
+        })
+        .catch((err) => console.log(err));
     }
-
-    setShow(false);
   };
 
   return (
@@ -95,7 +120,9 @@ const Categories = () => {
                   <td>{cat.name}</td>
                   <td>{cat.description}</td>
                   <td>
-                    <Badge bg={cat.status === "Active" ? "success" : "secondary"}>
+                    <Badge
+                      bg={cat.status === "Active" ? "success" : "secondary"}
+                    >
                       {cat.status}
                     </Badge>
                   </td>
@@ -137,7 +164,6 @@ const Categories = () => {
             <Form.Group className="mb-3">
               <Form.Label>Name</Form.Label>
               <Form.Control
-                type="text"
                 value={formData.name}
                 onChange={(e) =>
                   setFormData({ ...formData, name: e.target.value })

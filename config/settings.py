@@ -49,6 +49,8 @@ INSTALLED_APPS = [
     'apps.channels',
     'apps.audit_logs',
     'apps.locations',
+    'apps.categories',
+    'apps.priorities',
 ]
 
 

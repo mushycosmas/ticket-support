@@ -1,14 +1,15 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Table, Button, Modal, Form, Badge } from "react-bootstrap";
 
+import {
+  getPriorities,
+  createPriority,
+  updatePriority,
+  deletePriority,
+} from "../../api/priorityApi";
+
 const Priorities = () => {
-  // Mock data (replace with API later)
-  const [priorities, setPriorities] = useState([
-    { id: 1, name: "Low", level: 1, color: "secondary", description: "Low priority ticket" },
-    { id: 2, name: "Medium", level: 2, color: "info", description: "Normal priority ticket" },
-    { id: 3, name: "High", level: 3, color: "warning", description: "High urgency ticket" },
-    { id: 4, name: "Critical", level: 4, color: "danger", description: "Urgent system failure" },
-  ]);
+  const [priorities, setPriorities] = useState([]);
 
   const [show, setShow] = useState(false);
   const [editMode, setEditMode] = useState(false);
@@ -21,14 +22,36 @@ const Priorities = () => {
     color: "secondary",
   });
 
-  // Open create modal
+  // =====================
+  // LOAD DATA
+  // =====================
+  const fetchPriorities = () => {
+    getPriorities()
+      .then((res) => setPriorities(res.data))
+      .catch((err) => console.log(err));
+  };
+
+  useEffect(() => {
+    fetchPriorities();
+  }, []);
+
+  // =====================
+  // CREATE
+  // =====================
   const handleCreate = () => {
     setEditMode(false);
-    setFormData({ name: "", level: "", description: "", color: "secondary" });
+    setFormData({
+      name: "",
+      level: "",
+      description: "",
+      color: "secondary",
+    });
     setShow(true);
   };
 
-  // Open edit modal
+  // =====================
+  // EDIT
+  // =====================
   const handleEdit = (priority) => {
     setEditMode(true);
     setCurrentId(priority.id);
@@ -41,30 +64,36 @@ const Priorities = () => {
     setShow(true);
   };
 
-  // Delete priority
+  // =====================
+  // DELETE
+  // =====================
   const handleDelete = (id) => {
-    const filtered = priorities.filter((p) => p.id !== id);
-    setPriorities(filtered);
+    deletePriority(id)
+      .then(() => fetchPriorities())
+      .catch((err) => console.log(err));
   };
 
-  // Submit form
+  // =====================
+  // SUBMIT
+  // =====================
   const handleSubmit = (e) => {
     e.preventDefault();
 
     if (editMode) {
-      const updated = priorities.map((p) =>
-        p.id === currentId ? { ...p, ...formData } : p
-      );
-      setPriorities(updated);
+      updatePriority(currentId, formData)
+        .then(() => {
+          fetchPriorities();
+          setShow(false);
+        })
+        .catch((err) => console.log(err));
     } else {
-      const newPriority = {
-        id: Date.now(),
-        ...formData,
-      };
-      setPriorities([...priorities, newPriority]);
+      createPriority(formData)
+        .then(() => {
+          fetchPriorities();
+          setShow(false);
+        })
+        .catch((err) => console.log(err));
     }
-
-    setShow(false);
   };
 
   return (
@@ -102,7 +131,9 @@ const Priorities = () => {
                     <td>{p.level}</td>
                     <td>{p.description}</td>
                     <td>
-                      <Badge bg={p.color}>{p.name}</Badge>
+                      <Badge bg={p.color}>
+                        {p.name}
+                      </Badge>
                     </td>
                     <td>
                       <Button
@@ -139,11 +170,9 @@ const Priorities = () => {
 
         <Form onSubmit={handleSubmit}>
           <Modal.Body>
-            {/* Name */}
             <Form.Group className="mb-3">
               <Form.Label>Name</Form.Label>
               <Form.Control
-                type="text"
                 value={formData.name}
                 onChange={(e) =>
                   setFormData({ ...formData, name: e.target.value })
@@ -152,7 +181,6 @@ const Priorities = () => {
               />
             </Form.Group>
 
-            {/* Level */}
             <Form.Group className="mb-3">
               <Form.Label>Level</Form.Label>
               <Form.Control
@@ -164,11 +192,10 @@ const Priorities = () => {
                 required
               />
               <Form.Text>
-                Lower number = higher priority order control
+                Lower number = higher priority
               </Form.Text>
             </Form.Group>
 
-            {/* Description */}
             <Form.Group className="mb-3">
               <Form.Label>Description</Form.Label>
               <Form.Control
@@ -181,20 +208,19 @@ const Priorities = () => {
               />
             </Form.Group>
 
-            {/* Color */}
             <Form.Group>
-              <Form.Label>Color Indicator</Form.Label>
+              <Form.Label>Color</Form.Label>
               <Form.Select
                 value={formData.color}
                 onChange={(e) =>
                   setFormData({ ...formData, color: e.target.value })
                 }
               >
-                <option value="secondary">Secondary (Gray)</option>
-                <option value="info">Info (Blue)</option>
-                <option value="warning">Warning (Yellow)</option>
-                <option value="danger">Danger (Red)</option>
-                <option value="success">Success (Green)</option>
+                <option value="secondary">Secondary</option>
+                <option value="info">Info</option>
+                <option value="warning">Warning</option>
+                <option value="danger">Danger</option>
+                <option value="success">Success</option>
               </Form.Select>
             </Form.Group>
           </Modal.Body>
