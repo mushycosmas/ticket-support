@@ -6,7 +6,7 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 
-from .models import Ticket
+from .models import Ticket, TicketAttachment
 from .serializers import TicketSerializer
 
 User = get_user_model()
@@ -25,28 +25,48 @@ class TicketViewSet(viewsets.ModelViewSet):
         return [IsAuthenticated()]
 
     # =========================
-    # CREATE (CLEAN - NO MANUAL MAPPING)
+    # CREATE TICKET + FILES
     # =========================
     def create(self, request, *args, **kwargs):
-        print("\n========== RAW REQUEST DATA ==========")
+
+        print("\n========== RAW DATA ==========")
         print(request.data)
 
-        # IMPORTANT: DO NOT MANUALLY MAP street_id
-        # DRF serializer handles street_id → street automatically
+        print("\n========== FILES ==========")
+        print(request.FILES)
 
-        serializer = self.get_serializer(data=request.data)
+        serializer = self.get_serializer(
+            data=request.data,
+            context={"request": request}
+        )
 
         serializer.is_valid(raise_exception=True)
+        ticket = serializer.save()
 
-        print("\n========== VALIDATED DATA ==========")
-        print(serializer.validated_data)
+        # =========================
+        # HANDLE ATTACHMENTS SAFELY
+        # =========================
+        files = request.FILES.getlist("attachments")
 
-        self.perform_create(serializer)
+        if files:
+            print(f"\nSaving {len(files)} attachment(s)...")
 
-        print("\n========== SAVED INSTANCE ==========")
-        print(serializer.instance)
+            attachments = [
+                TicketAttachment(
+                    ticket=ticket,
+                    file=file,
+                    file_name=file.name,
+                    uploaded_by=request.user if request.user.is_authenticated else None
+                )
+                for file in files
+            ]
 
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+            TicketAttachment.objects.bulk_create(attachments)
+
+        return Response(
+            self.get_serializer(ticket, context={"request": request}).data,
+            status=status.HTTP_201_CREATED
+        )
 
     # =========================
     # QUERYSET
@@ -103,7 +123,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         return qs
 
     # =========================
-    # ASSIGN
+    # ASSIGN TICKET
     # =========================
     @action(detail=True, methods=["post"])
     def assign(self, request, pk=None):
@@ -205,7 +225,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         )
 
     # =========================
-    # RESOLVE
+    # RESOLVE TICKET
     # =========================
     @action(detail=True, methods=["post"])
     def resolve(self, request, pk=None):
@@ -229,7 +249,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         })
 
     # =========================
-    # CLOSE
+    # CLOSE TICKET
     # =========================
     @action(detail=True, methods=["post"])
     def close(self, request, pk=None):
