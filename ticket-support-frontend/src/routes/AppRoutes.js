@@ -15,6 +15,8 @@ import TicketDetails from "../pages/tickets/TicketDetails";
 
 // Admin
 import Users from "../pages/admin/Users";
+import Roles from "../pages/admin/Roles";
+
 import Teams from "../pages/admin/Teams";
 import Categories from "../pages/admin/Categories";
 import Priorities from "../pages/admin/Priorities";
@@ -71,6 +73,8 @@ function AppRoutes() {
                     <Route path="/team/agents" element={<TeamAgents />} />
 
                     {/* Administration */}
+                    
+                    <Route path="/admin/roles" element={<Roles />} />
                     <Route path="/admin/users" element={<Users />} />
                     <Route path="/admin/teams" element={<Teams />} />
                     <Route path="/admin/categories" element={<Categories />} />

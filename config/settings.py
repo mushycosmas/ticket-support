@@ -51,6 +51,7 @@ INSTALLED_APPS = [
     'apps.locations',
     'apps.categories',
     'apps.priorities',
+    "apps.roles",
 ]
 
 

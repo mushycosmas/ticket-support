@@ -1,9 +1,19 @@
 import React, { useEffect, useState } from "react";
 import { Modal, Button, Form } from "react-bootstrap";
-import { createUser, updateUser, getTeams } from "../../api/userApi";
+
+import {
+    createUser,
+    updateUser,
+    getTeams
+} from "../../api/userApi";
+
+import { getRegions } from "../../api/locationApi";
 
 const UserFormModal = ({ show, onHide, user, onSuccess }) => {
 
+    // =========================
+    // FORM STATE
+    // =========================
     const [form, setForm] = useState({
         username: "",
         first_name: "",
@@ -11,18 +21,46 @@ const UserFormModal = ({ show, onHide, user, onSuccess }) => {
         email: "",
         password: "",
         role: "AGENT",
-        team: ""
+        team: "",
+        region: ""
     });
 
     const [teams, setTeams] = useState([]);
+    const [regions, setRegions] = useState([]);
 
+    // =========================
+    // LOAD TEAMS
+    // =========================
     useEffect(() => {
-        getTeams().then(res => setTeams(res.data));
+        getTeams()
+            .then(res => setTeams(res.data))
+            .catch(err => console.error("Failed to load teams", err));
     }, []);
 
+    // =========================
+    // LOAD REGIONS
+    // =========================
+    useEffect(() => {
+        getRegions()
+            .then(res => setRegions(res.data))
+            .catch(err => console.error("Failed to load regions", err));
+    }, []);
+
+    // =========================
+    // FILL FORM FOR EDIT / RESET FOR CREATE
+    // =========================
     useEffect(() => {
         if (user) {
-            setForm(user);
+            setForm({
+                username: user.username || "",
+                first_name: user.first_name || "",
+                last_name: user.last_name || "",
+                email: user.email || "",
+                password: "",
+                role: user.role || "AGENT",
+                team: user.team || "",
+                region: user.region || ""
+            });
         } else {
             setForm({
                 username: "",
@@ -31,28 +69,50 @@ const UserFormModal = ({ show, onHide, user, onSuccess }) => {
                 email: "",
                 password: "",
                 role: "AGENT",
-                team: ""
+                team: "",
+                region: ""
             });
         }
     }, [user]);
 
+    // =========================
+    // HANDLE INPUT CHANGE
+    // =========================
     const handleChange = (e) => {
-        setForm({ ...form, [e.target.name]: e.target.value });
+        setForm({
+            ...form,
+            [e.target.name]: e.target.value
+        });
     };
 
+    // =========================
+    // SUBMIT
+    // =========================
     const handleSubmit = async () => {
-        if (user) {
-            await updateUser(user.id, form);
-        } else {
-            await createUser(form);
-        }
 
-        onSuccess();
-        onHide();
+        const payload = {
+            ...form,
+            region: form.region
+        };
+
+        try {
+            if (user) {
+                await updateUser(user.id, payload);
+            } else {
+                await createUser(payload);
+            }
+
+            onSuccess();
+            onHide();
+
+        } catch (err) {
+            console.error("User save failed", err);
+            alert("Failed to save user");
+        }
     };
 
     return (
-        <Modal show={show} onHide={onHide}>
+        <Modal show={show} onHide={onHide} centered>
             <Modal.Header closeButton>
                 <Modal.Title>
                     {user ? "Edit User" : "Create User"}
@@ -60,9 +120,9 @@ const UserFormModal = ({ show, onHide, user, onSuccess }) => {
             </Modal.Header>
 
             <Modal.Body>
-
                 <Form>
 
+                    {/* USERNAME */}
                     <Form.Control
                         name="username"
                         placeholder="Username"
@@ -71,6 +131,7 @@ const UserFormModal = ({ show, onHide, user, onSuccess }) => {
                         value={form.username}
                     />
 
+                    {/* EMAIL */}
                     <Form.Control
                         name="email"
                         placeholder="Email"
@@ -79,6 +140,7 @@ const UserFormModal = ({ show, onHide, user, onSuccess }) => {
                         value={form.email}
                     />
 
+                    {/* FIRST NAME */}
                     <Form.Control
                         name="first_name"
                         placeholder="First Name"
@@ -87,6 +149,7 @@ const UserFormModal = ({ show, onHide, user, onSuccess }) => {
                         value={form.first_name}
                     />
 
+                    {/* LAST NAME */}
                     <Form.Control
                         name="last_name"
                         placeholder="Last Name"
@@ -95,6 +158,7 @@ const UserFormModal = ({ show, onHide, user, onSuccess }) => {
                         value={form.last_name}
                     />
 
+                    {/* PASSWORD */}
                     {!user && (
                         <Form.Control
                             name="password"
@@ -120,6 +184,22 @@ const UserFormModal = ({ show, onHide, user, onSuccess }) => {
                         <option value="ADMIN">Admin</option>
                     </Form.Select>
 
+                    {/* REGION (NEW) */}
+                    <Form.Select
+                        name="region"
+                        className="mb-2"
+                        onChange={handleChange}
+                        value={form.region}
+                    >
+                        <option value="">Select Region</option>
+
+                        {regions.map((r) => (
+                            <option key={r.id} value={r.id}>
+                                {r.name}
+                            </option>
+                        ))}
+                    </Form.Select>
+
                     {/* TEAM */}
                     <Form.Select
                         name="team"
@@ -136,7 +216,6 @@ const UserFormModal = ({ show, onHide, user, onSuccess }) => {
                     </Form.Select>
 
                 </Form>
-
             </Modal.Body>
 
             <Modal.Footer>

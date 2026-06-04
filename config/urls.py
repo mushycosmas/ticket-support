@@ -28,16 +28,19 @@ urlpatterns = [
     path('api/reports/', include('apps.reports.urls')),
 
     # CHANNELS
-    path('api/channels/', include('apps.channels.urls')),
+     path('api/channels/', include('apps.channels.urls')),
 
     # AUDIT LOGS
-    path('api/audit/', include('apps.audit_logs.urls')),
+     path('api/audit/', include('apps.audit_logs.urls')),
 
-    # Locations
+     #Locations
      path('api/locations/', include('apps.locations.urls')),
-
+     #categories
      path('api/categories/', include('apps.categories.urls')),
+     #priority
      path('api/priorities/', include('apps.priorities.urls')),
+     #roles
+     path("api/roles/", include("apps.roles.urls")),
   
 ]
 

@@ -127,6 +127,11 @@ const Sidebar = () => {
                         </div>
 
                         <Nav className="flex-column mb-3">
+                             <Nav.Link as={Link} to="/admin/roles">
+                                <Person className="me-2" />
+                                Roles
+                            </Nav.Link>
+                            
                             <Nav.Link as={Link} to="/admin/users">
                                 <Person className="me-2" />
                                 Users
