@@ -1,4 +1,5 @@
 from django.db import models
+from django.utils import timezone
 
 
 # =====================
@@ -36,6 +37,17 @@ class Ticket(models.Model):
         ('HIGH', 'High'),
         ('CRITICAL', 'Critical'),
     ]
+
+    # =====================
+    # IDENTIFIER
+    # =====================
+    ticket_number = models.CharField(
+        max_length=50,
+        unique=True,
+        blank=True,
+        null=True,
+        db_index=True
+    )
 
     # =====================
     # CUSTOMER INFO
@@ -82,7 +94,7 @@ class Ticket(models.Model):
     )
 
     # =====================
-    # LOCATION (ONLY STREET)
+    # LOCATION
     # =====================
     street = models.ForeignKey(
         STREET_MODEL,
@@ -99,8 +111,32 @@ class Ticket(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
     resolved_at = models.DateTimeField(null=True, blank=True)
 
+    # =====================
+    # SAVE OVERRIDE (TICKET NUMBER GENERATOR)
+    # =====================
+    def save(self, *args, **kwargs):
+
+        if not self.ticket_number:
+            today = timezone.now().strftime("%Y%m%d")
+
+            last_ticket = Ticket.objects.filter(
+                ticket_number__startswith=f"TKT-{today}"
+            ).order_by("id").last()
+
+            if last_ticket and last_ticket.ticket_number:
+                try:
+                    last_number = int(last_ticket.ticket_number.split("-")[-1])
+                except:
+                    last_number = 0
+            else:
+                last_number = 0
+
+            self.ticket_number = f"TKT-{today}-{last_number + 1:06d}"
+
+        super().save(*args, **kwargs)
+
     def __str__(self):
-        return f"{self.title} ({self.status})"
+        return f"{self.ticket_number or self.id} - {self.title}"
 
 
 # =====================

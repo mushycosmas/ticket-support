@@ -89,7 +89,7 @@ class TicketSerializer(serializers.ModelSerializer):
             "priority",
             "created_at",
             "channel",
-
+            "ticket_number",
             "customer_name",
             "customer_phone",
             "customer_email",
