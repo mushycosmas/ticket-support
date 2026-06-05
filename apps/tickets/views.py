@@ -20,10 +20,11 @@ class TicketViewSet(viewsets.ModelViewSet):
     # PERMISSIONS
     # =========================
     def get_permissions(self):
-        if self.action == "create":
+        # Public endpoints (no authentication required)
+        if self.action in ["create", "track"]:  # ← ADD 'track' HERE
             return [AllowAny()]
+        # All other actions require authentication
         return [IsAuthenticated()]
-
     # =========================
     # CREATE TICKET + FILES
     # =========================
@@ -269,3 +270,22 @@ class TicketViewSet(viewsets.ModelViewSet):
             "message": "Ticket closed",
             "status": ticket.status
         })
+    @action(detail=False, methods=["get"], permission_classes=[AllowAny])
+    def track(self, request):
+        ticket_number = request.query_params.get("ticket_number")
+
+        if not ticket_number:
+            return Response(
+                {"error": "ticket_number is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            ticket = Ticket.objects.get(ticket_number=ticket_number)
+            serializer = self.get_serializer(ticket)
+            return Response(serializer.data)
+        except Ticket.DoesNotExist:
+            return Response(
+                {"error": "Ticket not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
