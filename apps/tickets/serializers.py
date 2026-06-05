@@ -93,16 +93,12 @@ class TicketSerializer(serializers.ModelSerializer):
             "customer_name",
             "customer_phone",
             "customer_email",
-
             "team_id",
             "assigned_to_id",
-
             "street_id",
-
             "street_name",
             "team_name",
             "assigned_to_name",
             "location_full",
-
-            "attachments",  # ✅ IMPORTANT
+            "attachments",  
         ]
