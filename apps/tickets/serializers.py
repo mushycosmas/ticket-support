@@ -1,54 +1,77 @@
 from rest_framework import serializers
-from .models import Ticket, TicketAttachment, Customer
+from .models import Ticket, TicketAttachment, Customer, TicketHistory
 from apps.locations.models import Street
 
 
+# =========================
+# ATTACHMENTS
+# =========================
 class TicketAttachmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = TicketAttachment
         fields = ["id", "file", "file_name", "created_at"]
 
 
+# =========================
+# CUSTOMER
+# =========================
 class CustomerSerializer(serializers.ModelSerializer):
-    # Rename fields for response
-    customer_name = serializers.CharField(source='full_name', read_only=True)
-    customer_email = serializers.EmailField(source='email', read_only=True)
-    customer_phone = serializers.CharField(source='phone', read_only=True)
-    
+    customer_name = serializers.CharField(source="full_name", read_only=True)
+    customer_email = serializers.EmailField(source="email", read_only=True)
+    customer_phone = serializers.CharField(source="phone", read_only=True)
+
     class Meta:
         model = Customer
         fields = [
-            "id", 
-            "customer_name",      # renamed from full_name
-            "customer_email",     # renamed from email
-            "customer_phone",     # renamed from phone
-            "alternate_phone",
-            "company_name", 
-            "address", 
-            "city", 
+            "id",
+            "customer_name",
+            "customer_email",
+            "customer_phone",
+            "company_name",
+            "address",
+            "city",
             "country",
-            "total_tickets", 
-            "total_resolved", 
+            "total_tickets",
+            "total_resolved",
             "total_open",
-            "created_at", 
-            "last_ticket_created"
+            "created_at",
         ]
-        read_only_fields = ["total_tickets", "total_resolved", "total_open", "created_at"]
+        read_only_fields = ["total_tickets", "total_resolved", "total_open"]
 
 
+# =========================
+# TICKET HISTORY
+# =========================
+class TicketHistorySerializer(serializers.ModelSerializer):
+    created_by_name = serializers.CharField(source="created_by.username", read_only=True)
+
+    class Meta:
+        model = TicketHistory
+        fields = [
+            "id",
+            "action",
+            "comment",
+            "old_status",
+            "new_status",
+            "created_by",
+            "created_by_name",
+            "created_at",
+        ]
+
+
+# =========================
+# MAIN TICKET SERIALIZER
+# =========================
 class TicketSerializer(serializers.ModelSerializer):
-    # Customer nested serializer for read (now returns customer_name, customer_email, customer_phone)
+    # -------- Customer read --------
     customer_detail = CustomerSerializer(source="customer", read_only=True)
-    
-    # Write-only field for creating ticket with customer
+
+    # -------- Customer write --------
     customer_email = serializers.EmailField(write_only=True, required=True)
-    customer_name = serializers.CharField(write_only=True, required=False, allow_null=True)
-    customer_phone = serializers.CharField(write_only=True, required=False, allow_null=True)
-    
-    # Other fields
-    team_name = serializers.CharField(source="team.name", read_only=True)
-    assigned_to_name = serializers.SerializerMethodField()
-    
+    customer_name = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    customer_phone = serializers.CharField(write_only=True, required=False, allow_blank=True)
+
+    # -------- Location --------
     street_id = serializers.PrimaryKeyRelatedField(
         queryset=Street.objects.all(),
         source="street",
@@ -56,47 +79,41 @@ class TicketSerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True
     )
-    
+
     street_name = serializers.CharField(source="street.name", read_only=True)
-    location_full = serializers.SerializerMethodField()
+
+    # -------- Assignment --------
+    team_name = serializers.CharField(source="team.name", read_only=True)
+    assigned_to_name = serializers.SerializerMethodField()
+
+    # -------- Attachments --------
     attachments = TicketAttachmentSerializer(many=True, read_only=True)
 
-    def __init__(self, *args, **kwargs):
-        """Make customer field optional in serializer"""
-        super().__init__(*args, **kwargs)
-        # Make customer field not required
-        if 'customer' in self.fields:
-            self.fields['customer'].required = False
-            self.fields['customer'].allow_null = True
+    # -------- HISTORY --------
+    history = TicketHistorySerializer(many=True, read_only=True)
 
+    # =========================
+    # CREATE
+    # =========================
     def create(self, validated_data):
         request = self.context.get("request")
         files = request.FILES.getlist("file") if request else []
-        
-        # Extract customer data
-        customer_email = validated_data.pop('customer_email', None)
-        customer_name = validated_data.pop('customer_name', None)
-        customer_phone = validated_data.pop('customer_phone', None)
-        
-        if not customer_email:
-            raise serializers.ValidationError({"customer_email": "Customer email is required"})
-        
-        # Create or get customer
-        customer, created = Customer.get_or_create_customer(
-            email=customer_email,
-            full_name=customer_name,
-            phone=customer_phone
+
+        email = validated_data.pop("customer_email")
+        name = validated_data.pop("customer_name", None)
+        phone = validated_data.pop("customer_phone", None)
+
+        # IMPORTANT: reuse customer (NO duplicates)
+        customer, _ = Customer.get_or_create_customer(
+            email=email,
+            phone=phone,
+            full_name=name
         )
-        
-        if not customer:
-            raise serializers.ValidationError({"customer_email": "Could not create/get customer"})
-        
-        validated_data['customer'] = customer
-        
-        # Create ticket
+
+        validated_data["customer"] = customer
         ticket = Ticket.objects.create(**validated_data)
-        
-        # Save attachments
+
+        # attachments
         for f in files:
             TicketAttachment.objects.create(
                 ticket=ticket,
@@ -104,54 +121,64 @@ class TicketSerializer(serializers.ModelSerializer):
                 file_name=f.name,
                 uploaded_by=request.user if request and request.user.is_authenticated else None
             )
-        
+
+        # initial history - Using correct field names
+        TicketHistory.objects.create(
+            ticket=ticket,
+            action='CREATED',
+            comment="Ticket created",
+            created_by=request.user if request and request.user.is_authenticated else None
+        )
+
         return ticket
 
+    # =========================
+    # UPDATE + HISTORY LOGGING
+    # =========================
     def update(self, instance, validated_data):
-        # Handle customer update if email provided
-        customer_email = validated_data.pop('customer_email', None)
-        if customer_email:
-            customer, created = Customer.get_or_create_customer(
-                email=customer_email,
-                full_name=validated_data.pop('customer_name', None),
-                phone=validated_data.pop('customer_phone', None)
+        request = self.context.get("request")
+        old_status = instance.status
+
+        # customer update
+        email = validated_data.pop("customer_email", None)
+        if email:
+            customer, _ = Customer.get_or_create_customer(
+                email=email,
+                phone=validated_data.pop("customer_phone", None),
+                full_name=validated_data.pop("customer_name", None)
             )
-            if customer:
-                instance.customer = customer
-        
-        # Update other fields
+            instance.customer = customer
+
+        # update fields
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
-        
+
         instance.save()
+
+        # AUTO HISTORY ON STATUS CHANGE
+        if old_status != instance.status:
+            TicketHistory.objects.create(
+                ticket=instance,
+                action='STATUS_CHANGED',
+                comment=f"Status changed from {old_status} to {instance.status}",
+                old_status=old_status,
+                new_status=instance.status,
+                created_by=request.user if request and request.user.is_authenticated else None
+            )
+
         return instance
 
+    # =========================
+    # HELPERS
+    # =========================
     def get_assigned_to_name(self, obj):
         if obj.assigned_to:
-            return (
-                f"{obj.assigned_to.first_name} {obj.assigned_to.last_name}".strip()
-                or obj.assigned_to.username
-            )
+            return obj.assigned_to.get_full_name() or obj.assigned_to.username
         return None
 
-    def get_location_full(self, obj):
-        street = obj.street
-        ward = street.ward if street else None
-        district = ward.district if ward else None
-        region = district.region if district else None
-
-        parts = []
-        if region:
-            parts.append(region.name)
-        if district:
-            parts.append(district.name)
-        if ward:
-            parts.append(ward.name)
-        if street:
-            parts.append(street.name)
-
-        return ", ".join(parts) if parts else None
-
+    # =========================
+    # META
+    # =========================
     class Meta:
         model = Ticket
         fields = [
@@ -165,29 +192,29 @@ class TicketSerializer(serializers.ModelSerializer):
             "updated_at",
             "channel",
             "resolved_at",
-            
-            # Customer relations
+
+            # customer
             "customer",
             "customer_detail",
-            "customer_email",  # write-only
-            "customer_name",   # write-only
-            "customer_phone",  # write-only
-            
-            # Assignment
+            "customer_email",
+            "customer_name",
+            "customer_phone",
+
+            # assignment
             "team",
             "team_name",
             "assigned_to",
             "assigned_to_name",
             "assigned_by",
-            
-            # Location
+
+            # location
             "street",
             "street_id",
             "street_name",
-            "location_full",
-            
-            # Attachments
+
+            # relations
             "attachments",
+            "history",
         ]
         extra_kwargs = {
             'customer': {'required': False, 'allow_null': True},

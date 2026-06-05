@@ -80,7 +80,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         user = request.user if request.user.is_authenticated else None
         self._log_history(
             ticket=ticket,
-            action=TicketHistory.ActionType.CREATED,
+            action='CREATED',
             user=user,
             metadata={'title': ticket.title, 'description': ticket.description}
         )
@@ -108,7 +108,7 @@ class TicketViewSet(viewsets.ModelViewSet):
             # Log attachment addition
             self._log_history(
                 ticket=ticket,
-                action=TicketHistory.ActionType.ATTACHMENT,
+                action='ATTACHMENT',
                 user=user,
                 metadata={'attachments': [f.file_name for f in attachments]}
             )
@@ -140,7 +140,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         if old_status != ticket.status:
             self._log_history(
                 ticket=ticket,
-                action=TicketHistory.ActionType.STATUS_CHANGED,
+                action='STATUS_CHANGED',
                 user=user,
                 old_status=old_status,
                 new_status=ticket.status,
@@ -151,7 +151,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         if old_priority != ticket.priority:
             self._log_history(
                 ticket=ticket,
-                action=TicketHistory.ActionType.PRIORITY_CHANGED,
+                action='PRIORITY_CHANGED',
                 user=user,
                 old_priority=old_priority,
                 new_priority=ticket.priority,
@@ -248,7 +248,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         # Log the comment
         history = self._log_history(
             ticket=ticket,
-            action=TicketHistory.ActionType.COMMENTED,
+            action='COMMENTED',
             user=user,
             comment=comment_text,
             metadata={'comment': comment_text}
@@ -301,7 +301,7 @@ class TicketViewSet(viewsets.ModelViewSet):
                 # Log assignment to team
                 self._log_history(
                     ticket=ticket,
-                    action=TicketHistory.ActionType.ASSIGNED,
+                    action='ASSIGNED',
                     user=user,
                     old_assignee=str(old_assignee) if old_assignee else None,
                     new_assignee=f"Team {team_id}",
@@ -331,7 +331,7 @@ class TicketViewSet(viewsets.ModelViewSet):
                 # Log assignment to agent
                 self._log_history(
                     ticket=ticket,
-                    action=TicketHistory.ActionType.ASSIGNED,
+                    action='ASSIGNED',
                     user=user,
                     old_assignee=old_assignee.get_full_name() if old_assignee else None,
                     new_assignee=agent.get_full_name() or agent.username,
@@ -386,7 +386,7 @@ class TicketViewSet(viewsets.ModelViewSet):
             # Log assignment
             self._log_history(
                 ticket=ticket,
-                action=TicketHistory.ActionType.ASSIGNED,
+                action='ASSIGNED',
                 user=user,
                 old_assignee=old_assignee.get_full_name() if old_assignee else None,
                 new_assignee=agent.get_full_name() or agent.username,
@@ -405,73 +405,74 @@ class TicketViewSet(viewsets.ModelViewSet):
         )
 
     # =========================
-    # RESOLVE TICKET
+    # RESOLVE TICKET (WITH COMMENT)
     # =========================
     @action(detail=True, methods=["post"])
     def resolve(self, request, pk=None):
         user = request.user
         ticket = self.get_object()
 
-        if user.role == "AGENT":
-            if ticket.assigned_to_id != user.id:
-                return Response(
-                    {"error": "Not your ticket"},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-
+        comment = request.data.get("comment", "").strip()
         old_status = ticket.status
+        
         ticket.status = "RESOLVED"
         ticket.resolved_at = timezone.now()
         ticket.save()
-        
-        # Log resolution
+
+        # Log resolution with comment
         self._log_history(
             ticket=ticket,
-            action=TicketHistory.ActionType.RESOLVED,
+            action='RESOLVED',
             user=user,
+            comment=comment if comment else None,
             old_status=old_status,
             new_status="RESOLVED",
-            metadata={'resolved_by': user.get_full_name() or user.username}
+            metadata={
+                "resolved_by": user.get_full_name() or user.username,
+                "comment": comment if comment else None
+            }
         )
 
         return Response({
-            "message": "Ticket resolved",
-            "status": ticket.status
+            "message": "Ticket resolved successfully",
+            "status": ticket.status,
+            "comment": comment if comment else None
         })
 
     # =========================
-    # CLOSE TICKET
+    # CLOSE TICKET (WITH COMMENT)
     # =========================
     @action(detail=True, methods=["post"])
     def close(self, request, pk=None):
         user = request.user
         ticket = self.get_object()
 
-        if user.role not in ["ADMIN", "TEAM_LEAD"]:
-            return Response(
-                {"error": "Not allowed"},
-                status=status.HTTP_403_FORBIDDEN
-            )
-
+        comment = request.data.get("comment", "").strip()
         old_status = ticket.status
+        
         ticket.status = "CLOSED"
         ticket.save()
-        
-        # Log closing
+
+        # Log closing with comment
         self._log_history(
             ticket=ticket,
-            action=TicketHistory.ActionType.CLOSED,
+            action='CLOSED',
             user=user,
+            comment=comment if comment else None,
             old_status=old_status,
             new_status="CLOSED",
-            metadata={'closed_by': user.get_full_name() or user.username}
+            metadata={
+                "closed_by": user.get_full_name() or user.username,
+                "comment": comment if comment else None
+            }
         )
 
         return Response({
-            "message": "Ticket closed",
-            "status": ticket.status
+            "message": "Ticket closed successfully",
+            "status": ticket.status,
+            "comment": comment if comment else None
         })
-    
+
     # =========================
     # TRACK TICKET (PUBLIC)
     # =========================
@@ -501,8 +502,8 @@ class TicketViewSet(viewsets.ModelViewSet):
                     'user': history.created_by.get_full_name() or history.created_by.username if history.created_by else 'System',
                     'user_role': history.created_by.role if history.created_by else None,
                     'action': history.action,
-                    'is_comment': history.action == TicketHistory.ActionType.COMMENTED,
-                    'comment': history.comment if history.action == TicketHistory.ActionType.COMMENTED else None
+                    'is_comment': history.action == 'COMMENTED',
+                    'comment': history.comment if history.action == 'COMMENTED' else None
                 })
             
             # Sort oldest first for chronological display
