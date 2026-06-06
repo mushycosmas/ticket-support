@@ -41,27 +41,44 @@ def track_ticket(request):
     try:
         ticket = Ticket.objects.get(ticket_number=ticket_number)
         serializer = TicketSerializer(ticket)
+        data = serializer.data
         
-        # Add timeline from history
+        # Add timeline from history (using the correct related_name 'histories')
         timeline = []
         for history in ticket.histories.all().order_by('created_at'):
             timeline.append({
                 'id': history.id,
                 'date': history.created_at.isoformat(),
                 'action': history.action,
+                'message': history.display_message,
+                'type': history.display_type,
                 'comment': history.comment,
                 'user': history.created_by.get_full_name() or history.created_by.username if history.created_by else 'System',
+                'user_role': history.created_by.role if history.created_by else None,
+                'is_comment': history.action == 'COMMENTED',
+                'old_status': history.old_status,
+                'new_status': history.new_status,
+                'old_priority': history.old_priority,
+                'new_priority': history.new_priority,
+                'old_assignee': history.old_assignee,
+                'new_assignee': history.new_assignee,
             })
         
-        data = serializer.data
         data['timeline'] = timeline
         data['lastUpdate'] = ticket.updated_at.isoformat()
         
         return Response(data)
+        
     except Ticket.DoesNotExist:
         return Response(
-            {'error': 'Ticket not found'},
+            {'error': f'Ticket "{ticket_number}" not found'},
             status=status.HTTP_404_NOT_FOUND
+        )
+    except Exception as e:
+        print(f"Error in track_ticket: {e}")
+        return Response(
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
 
@@ -72,9 +89,27 @@ def public_ticket_status(request, ticket_number):
     try:
         ticket = Ticket.objects.get(ticket_number=ticket_number)
         serializer = TicketSerializer(ticket)
-        return Response(serializer.data)
+        data = serializer.data
+        
+        # Add basic timeline
+        timeline = []
+        for history in ticket.histories.all().order_by('created_at')[:10]:  # Last 10 events
+            timeline.append({
+                'id': history.id,
+                'date': history.created_at.isoformat(),
+                'action': history.action,
+                'message': history.display_message,
+                'type': history.display_type,
+                'comment': history.comment,
+                'user': history.created_by.get_full_name() or history.created_by.username if history.created_by else 'System',
+            })
+        
+        data['timeline'] = timeline
+        data['lastUpdate'] = ticket.updated_at.isoformat()
+        
+        return Response(data)
     except Ticket.DoesNotExist:
         return Response(
-            {'error': 'Ticket not found'},
+            {'error': f'Ticket "{ticket_number}" not found'},
             status=status.HTTP_404_NOT_FOUND
         )
