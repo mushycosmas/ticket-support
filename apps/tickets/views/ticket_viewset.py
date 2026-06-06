@@ -27,7 +27,7 @@ class TicketViewSet(viewsets.ModelViewSet):
             return Ticket.objects.none()
         
         queryset = Ticket.objects.select_related(
-            "team", "assigned_to", "assigned_by"
+            "team", "assigned_to", "assigned_by", "customer", "street"
         ).prefetch_related("attachments", "histories").order_by("-id")
         
         if user.role == "ADMIN":
@@ -91,6 +91,9 @@ class TicketViewSet(viewsets.ModelViewSet):
         import uuid
         from ..models import Customer
         
+        print("\n========== CREATING TICKET ==========")
+        print("Request data:", request.data)
+        
         # Get or create customer
         email = request.data.get('customer_email')
         phone = request.data.get('customer_phone')
@@ -102,13 +105,17 @@ class TicketViewSet(viewsets.ModelViewSet):
                 email=email,
                 phone=phone,
                 full_name=full_name,
-                created_by=request.user if request.user.is_authenticated else None
             )
+            print(f"Customer {'created' if created else 'retrieved'}: {customer}")
+        
+        # Get street_id from request
+        street_id = request.data.get('street_id')
+        print(f"Street ID received: {street_id}")
         
         # Generate ticket number
         ticket_number = f"TKT-{uuid.uuid4().hex[:8].upper()}"
         
-        # Create ticket
+        # Create ticket with street
         ticket = Ticket.objects.create(
             ticket_number=ticket_number,
             title=request.data.get('title'),
@@ -117,15 +124,19 @@ class TicketViewSet(viewsets.ModelViewSet):
             status='OPEN',
             channel='WEB' if request.user.is_authenticated else 'PUBLIC',
             customer=customer,
-            created_by=request.user if request.user.is_authenticated else None
+            street_id=street_id if street_id else None,
         )
         
-        # Log creation
+        # Log creation using TicketHistory
         TicketHistory.objects.create(
             ticket=ticket,
-            action='CREATED',
+            action=TicketHistory.ActionType.CREATED,
             created_by=request.user if request.user.is_authenticated else None,
-            metadata={'title': ticket.title}
+            metadata={
+                'title': ticket.title, 
+                'description': ticket.description,
+                'street_id': street_id
+            }
         )
         
         serializer = self.get_serializer(ticket)
@@ -145,6 +156,11 @@ class TicketViewSet(viewsets.ModelViewSet):
                 'action': history.action,
                 'comment': history.comment,
                 'user': history.created_by.get_full_name() or history.created_by.username if history.created_by else 'System',
+                'user_role': history.created_by.role if history.created_by else None,
+                'old_status': history.old_status,
+                'new_status': history.new_status,
+                'old_priority': history.old_priority,
+                'new_priority': history.new_priority,
             })
         
         data = serializer.data
@@ -166,7 +182,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         
         TicketHistory.objects.create(
             ticket=ticket,
-            action='RESOLVED',
+            action=TicketHistory.ActionType.RESOLVED,
             comment=comment,
             old_status=old_status,
             new_status='RESOLVED',
@@ -191,7 +207,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         
         TicketHistory.objects.create(
             ticket=ticket,
-            action='CLOSED',
+            action=TicketHistory.ActionType.CLOSED,
             comment=comment,
             old_status=old_status,
             new_status='CLOSED',
@@ -226,10 +242,11 @@ class TicketViewSet(viewsets.ModelViewSet):
             
             TicketHistory.objects.create(
                 ticket=ticket,
-                action='ASSIGNED',
+                action=TicketHistory.ActionType.ASSIGNED,
                 old_assignee=str(old_assignee) if old_assignee else None,
                 new_assignee=agent.get_full_name() or agent.username,
-                created_by=request.user
+                created_by=request.user,
+                metadata={'agent_id': agent.id}
             )
             
             return Response({
@@ -258,7 +275,7 @@ class TicketViewSet(viewsets.ModelViewSet):
         
         history = TicketHistory.objects.create(
             ticket=ticket,
-            action='COMMENTED',
+            action=TicketHistory.ActionType.COMMENTED,
             comment=comment,
             created_by=request.user
         )
