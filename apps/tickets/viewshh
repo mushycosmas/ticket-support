@@ -518,3 +518,114 @@ class TicketViewSet(viewsets.ModelViewSet):
                 {"error": "Ticket not found"},
                 status=status.HTTP_404_NOT_FOUND
             )
+
+            
+# Add CustomerViewSet here
+class CustomerViewSet(viewsets.GenericViewSet):
+    """Read-only ViewSet for Customers"""
+    permission_classes = [IsAuthenticated]
+    
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == 'ADMIN':
+            return Customer.objects.all()
+        elif user.role == 'TEAM_LEAD':
+            return Customer.objects.filter(tickets__team_id=user.team_id).distinct()
+        elif user.role == 'AGENT':
+            return Customer.objects.filter(tickets__assigned_to=user).distinct()
+        return Customer.objects.none()
+    
+    def list(self, request):
+        customers = self.get_queryset()
+        search = request.query_params.get('search', '')
+        if search:
+            customers = customers.filter(
+                Q(full_name__icontains=search) |
+                Q(email__icontains=search) |
+                Q(phone__icontains=search)
+            )
+        
+        page = int(request.query_params.get('page', 1))
+        page_size = int(request.query_params.get('page_size', 20))
+        start = (page - 1) * page_size
+        end = start + page_size
+        
+        customer_data = []
+        for customer in customers[start:end]:
+            customer_data.append({
+                'id': customer.id,
+                'full_name': customer.full_name,
+                'email': customer.email,
+                'phone': customer.phone,
+                'company_name': customer.company_name,
+                'total_tickets': customer.total_tickets,
+                'total_resolved': customer.total_resolved,
+                'total_open': customer.total_open,
+                'created_at': customer.created_at,
+            })
+        
+        return Response({
+            'count': customers.count(),
+            'page': page,
+            'page_size': page_size,
+            'results': customer_data
+        })
+    
+    def retrieve(self, request, pk=None):
+        try:
+            customer = self.get_queryset().get(id=pk)
+        except Customer.DoesNotExist:
+            return Response(
+                {"error": "Customer not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        tickets = Ticket.objects.filter(customer=customer).order_by('-created_at')
+        serializer = TicketSerializer(tickets, many=True)
+        
+        return Response({
+            'id': customer.id,
+            'full_name': customer.full_name,
+            'email': customer.email,
+            'phone': customer.phone,
+            'company_name': customer.company_name,
+            'total_tickets': customer.total_tickets,
+            'total_resolved': customer.total_resolved,
+            'total_open': customer.total_open,
+            'created_at': customer.created_at,
+            'tickets': serializer.data
+        })
+    
+    @action(detail=True, methods=['get'])
+    def tickets(self, request, pk=None):
+        """Get tickets for a specific customer"""
+        try:
+            customer = self.get_queryset().get(id=pk)
+        except Customer.DoesNotExist:
+            return Response(
+                {"error": "Customer not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        tickets = Ticket.objects.filter(customer=customer).order_by('-created_at')
+        
+        # Apply status filter
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            tickets = tickets.filter(status=status_filter.upper())
+        
+        # Pagination
+        page = int(request.query_params.get('page', 1))
+        page_size = int(request.query_params.get('page_size', 20))
+        start = (page - 1) * page_size
+        end = start + page_size
+        
+        paginated_tickets = tickets[start:end]
+        serializer = TicketSerializer(paginated_tickets, many=True)
+        
+        return Response({
+            'count': tickets.count(),
+            'page': page,
+            'page_size': page_size,
+            'results': serializer.data
+        })

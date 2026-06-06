@@ -1,85 +1,99 @@
 from rest_framework import serializers
-from .models import User, Team
+from django.contrib.auth import get_user_model
+from .models import Team
+
+User = get_user_model()
 
 
-# =========================
-# TEAM SERIALIZER
-# =========================
 class TeamSerializer(serializers.ModelSerializer):
-
+    member_count = serializers.SerializerMethodField()
+    
     class Meta:
         model = Team
-        fields = [
-            'id',
-            'name',
-            'description',
-            'created_at'
-        ]
+        fields = ['id', 'name', 'description', 'lead', 'member_count', 'created_at']
+    
+    def get_member_count(self, obj):
+        return obj.members.count() if hasattr(obj, 'members') else 0
 
 
-# =========================
-# USER SERIALIZER
-# =========================
 class UserSerializer(serializers.ModelSerializer):
-
-    # ✅ FIX: not required anymore
-    password = serializers.CharField(
-        write_only=True,
-        required=False,
-        allow_blank=True
-    )
-
-    team_name = serializers.CharField(source="team.name", read_only=True)
-
+    full_name = serializers.SerializerMethodField()
+    team_name = serializers.SerializerMethodField()
+    
     class Meta:
         model = User
         fields = [
-            'id',
-            'username',
-            'password',
-            'first_name',
-            'last_name',
-            'email',
-            'phone',
-            'role',
-            'team',
-            'team_id',
-            'team_name',
-            'is_active',
-            'date_joined',
+            'id', 'username', 'email', 'first_name', 'last_name', 'full_name',
+            'role', 'team', 'team_name', 'is_active', 'is_staff', 'is_superuser',
+            'last_login', 'date_joined'
         ]
+        read_only_fields = ['id', 'last_login', 'date_joined']
+    
+    def get_full_name(self, obj):
+        return obj.get_full_name() or obj.username
+    
+    def get_team_name(self, obj):
+        if obj.team:
+            return obj.team.name
+        return None
 
-        read_only_fields = ['id', 'date_joined']
 
-    # =========================
-    # CREATE USER
-    # =========================
+class UserCreateSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True, required=True)
+    password_confirm = serializers.CharField(write_only=True, required=True)
+    
+    class Meta:
+        model = User
+        fields = [
+            'username', 'email', 'password', 'password_confirm',
+            'first_name', 'last_name', 'role'
+        ]
+    
+    def validate(self, data):
+        if data['password'] != data['password_confirm']:
+            raise serializers.ValidationError({"password": "Passwords do not match"})
+        
+        if len(data['password']) < 6:
+            raise serializers.ValidationError({"password": "Password must be at least 6 characters"})
+        
+        return data
+    
     def create(self, validated_data):
-
-        password = validated_data.pop('password', None)
-
-        if not password:
-            password = "support123"
-
+        validated_data.pop('password_confirm')
+        password = validated_data.pop('password')
         user = User(**validated_data)
         user.set_password(password)
         user.save()
-
         return user
 
-    # =========================
-    # UPDATE USER
-    # =========================
-    def update(self, instance, validated_data):
 
-        password = validated_data.pop('password', None)
+class UserUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['first_name', 'last_name', 'email', 'role', 'team', 'is_active']
 
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
 
-        # only update password if provided
-        if password:
-            instance.set_password(password)
+class UserTicketSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    ticket_number = serializers.CharField()
+    title = serializers.CharField()
+    description = serializers.CharField(allow_blank=True, allow_null=True)
+    status = serializers.CharField()
+    priority = serializers.CharField()
+    created_at = serializers.DateTimeField()
+    updated_at = serializers.DateTimeField()
+    resolved_at = serializers.DateTimeField(allow_null=True)
+    customer_name = serializers.SerializerMethodField()
+    
+    def get_customer_name(self, obj):
+        if hasattr(obj, 'customer') and obj.customer:
+            return obj.customer.full_name
+        return None
 
-        instance.save()
-        return instance
+
+class UserStatsSerializer(serializers.Serializer):
+    total_assigned = serializers.IntegerField()
+    total_open = serializers.IntegerField()
+    total_in_progress = serializers.IntegerField()
+    total_resolved = serializers.IntegerField()
+    total_closed = serializers.IntegerField()

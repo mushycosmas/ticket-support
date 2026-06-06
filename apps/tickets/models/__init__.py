@@ -2,6 +2,6 @@
 from .ticket import Ticket
 from .attachment import TicketAttachment
 from .history import TicketHistory
-from .customer import Customer  # Add this line
+from .customer import Customer
 
 __all__ = ['Ticket', 'TicketAttachment', 'TicketHistory', 'Customer']
