@@ -108,26 +108,59 @@ class TicketViewSet(viewsets.ModelViewSet):
             )
             print(f"Customer {'created' if created else 'retrieved'}: {customer}")
         
-        # Get street_id from request
+        # Get fields from request
         street_id = request.data.get('street_id')
-        print(f"Street ID received: {street_id}")
+        assigned_to_id = request.data.get('assigned_to')
+        assigned_by_id = request.data.get('assigned_by')
+        team_id = request.data.get('team')
+        
+        print(f"Assigned to ID: {assigned_to_id}")
+        print(f"Assigned by ID: {assigned_by_id}")
+        print(f"Team ID: {team_id}")
         
         # Generate ticket number
         ticket_number = f"TKT-{uuid.uuid4().hex[:8].upper()}"
         
-        # Create ticket with street
+        # Create ticket with basic fields
         ticket = Ticket.objects.create(
             ticket_number=ticket_number,
             title=request.data.get('title'),
             description=request.data.get('description', ''),
-            priority=request.data.get('priority', 'P3_MEDIUM'),
+            priority=request.data.get('priority', 'MEDIUM'),
             status='OPEN',
-            channel='WEB' if request.user.is_authenticated else 'PUBLIC',
+            channel=request.data.get('channel', 'WEB'),
             customer=customer,
             street_id=street_id if street_id else None,
         )
         
-        # Log creation using TicketHistory
+        # Handle assignment fields
+        if assigned_to_id:
+            try:
+                agent = User.objects.get(id=assigned_to_id)
+                ticket.assigned_to = agent
+                ticket.status = 'IN_PROGRESS'  # Set to IN_PROGRESS when assigned
+                print(f"Assigned to agent: {agent.username}")
+            except User.DoesNotExist:
+                print(f"Agent with ID {assigned_to_id} not found")
+        
+        if assigned_by_id:
+            try:
+                assigned_by_user = User.objects.get(id=assigned_by_id)
+                ticket.assigned_by = assigned_by_user
+                print(f"Assigned by: {assigned_by_user.username}")
+            except User.DoesNotExist:
+                print(f"User with ID {assigned_by_id} not found")
+        elif request.user and request.user.is_authenticated:
+            ticket.assigned_by = request.user
+            print(f"Assigned by (current user): {request.user.username}")
+        
+        if team_id:
+            ticket.team_id = team_id
+            print(f"Team ID set: {team_id}")
+        
+        ticket.save()
+        
+        # Log creation
         TicketHistory.objects.create(
             ticket=ticket,
             action=TicketHistory.ActionType.CREATED,
@@ -135,7 +168,10 @@ class TicketViewSet(viewsets.ModelViewSet):
             metadata={
                 'title': ticket.title, 
                 'description': ticket.description,
-                'street_id': street_id
+                'street_id': street_id,
+                'assigned_to': assigned_to_id,
+                'assigned_by': assigned_by_id,
+                'team_id': team_id
             }
         )
         
