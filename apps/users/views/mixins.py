@@ -1,4 +1,7 @@
+# apps/users/mixins.py
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from django.db.models import Q
+
 
 class UserViewSetPermissions:
     """Permission handling for UserViewSet"""
@@ -27,7 +30,8 @@ class UserQuerySetMixin:
         if not user or not user.is_authenticated:
             return User.objects.none()
         
-        queryset = User.objects.select_related("team").all()
+        # ✅ FIX: Select related role and team for better performance
+        queryset = User.objects.select_related("team", "role").all()
         
         # Apply search filter
         search = self.request.query_params.get('search')
@@ -39,19 +43,28 @@ class UserQuerySetMixin:
                 Q(last_name__icontains=search)
             )
         
-        # Apply role filter
-        role = self.request.query_params.get('role')
-        if role:
-            queryset = queryset.filter(role=role)
+        # Apply role filter (filter by role name)
+        role_name = self.request.query_params.get('role')
+        if role_name:
+            queryset = queryset.filter(role__name=role_name)
         
-        # Role-based access
-        if user.role == "ADMIN":
+        # ✅ FIX: Compare role.name, not role object
+        # Check if user has admin role
+        if user.role and user.role.name == "ADMIN":
+            # Admin can see all users
             return queryset
-        elif user.role == "TEAM_LEAD":
-            return queryset.filter(team=user.team, role="AGENT")
-        elif user.role == "AGENT":
+        
+        # Check if user is team lead
+        elif user.role and user.role.name == "TEAM_LEAD":
+            # Team Lead can see agents in their team
+            return queryset.filter(team=user.team, role__name="AGENT")
+        
+        # Check if user is agent
+        elif user.role and user.role.name == "AGENT":
+            # Agent can only see themselves
             return queryset.filter(id=user.id)
         
+        # No valid role
         return User.objects.none()
 
 

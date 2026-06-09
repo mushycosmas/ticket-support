@@ -7,6 +7,9 @@ from ..models import Ticket
 from ..serializers import TicketSerializer
 
 
+# =========================
+# TEST ENDPOINT
+# =========================
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def test_endpoint(request):
@@ -26,26 +29,32 @@ def test_endpoint(request):
     })
 
 
+# =========================
+# TRACK TICKET (FIXED ROLE BUG)
+# =========================
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def track_ticket(request):
     """Public endpoint to track ticket status"""
+
     ticket_number = request.query_params.get('ticket_number')
-    
+
     if not ticket_number:
         return Response(
             {'error': 'ticket_number is required'},
             status=status.HTTP_400_BAD_REQUEST
         )
-    
+
     try:
         ticket = Ticket.objects.get(ticket_number=ticket_number)
         serializer = TicketSerializer(ticket)
         data = serializer.data
-        
-        # Add timeline from history (using the correct related_name 'histories')
+
         timeline = []
+
         for history in ticket.histories.all().order_by('created_at'):
+            created_by = history.created_by
+
             timeline.append({
                 'id': history.id,
                 'date': history.created_at.isoformat(),
@@ -53,8 +62,20 @@ def track_ticket(request):
                 'message': history.display_message,
                 'type': history.display_type,
                 'comment': history.comment,
-                'user': history.created_by.get_full_name() or history.created_by.username if history.created_by else 'System',
-                'user_role': history.created_by.role if history.created_by else None,
+
+                # ✅ SAFE USER FIELDS
+                'user': (
+                    created_by.get_full_name()
+                    if created_by else 'System'
+                ),
+
+                # ✅ FIXED ROLE SERIALIZATION BUG
+                'user_role': (
+                    created_by.role.name
+                    if created_by and created_by.role
+                    else None
+                ),
+
                 'is_comment': history.action == 'COMMENTED',
                 'old_status': history.old_status,
                 'new_status': history.new_status,
@@ -63,17 +84,18 @@ def track_ticket(request):
                 'old_assignee': history.old_assignee,
                 'new_assignee': history.new_assignee,
             })
-        
+
         data['timeline'] = timeline
         data['lastUpdate'] = ticket.updated_at.isoformat()
-        
+
         return Response(data)
-        
+
     except Ticket.DoesNotExist:
         return Response(
             {'error': f'Ticket "{ticket_number}" not found'},
             status=status.HTTP_404_NOT_FOUND
         )
+
     except Exception as e:
         print(f"Error in track_ticket: {e}")
         return Response(
@@ -82,18 +104,24 @@ def track_ticket(request):
         )
 
 
+# =========================
+# PUBLIC STATUS ENDPOINT
+# =========================
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def public_ticket_status(request, ticket_number):
     """Alternative public tracking endpoint using URL parameter"""
+
     try:
         ticket = Ticket.objects.get(ticket_number=ticket_number)
         serializer = TicketSerializer(ticket)
         data = serializer.data
-        
-        # Add basic timeline
+
         timeline = []
-        for history in ticket.histories.all().order_by('created_at')[:10]:  # Last 10 events
+
+        for history in ticket.histories.all().order_by('created_at')[:10]:
+            created_by = history.created_by
+
             timeline.append({
                 'id': history.id,
                 'date': history.created_at.isoformat(),
@@ -101,13 +129,25 @@ def public_ticket_status(request, ticket_number):
                 'message': history.display_message,
                 'type': history.display_type,
                 'comment': history.comment,
-                'user': history.created_by.get_full_name() or history.created_by.username if history.created_by else 'System',
+
+                # (optional safe fields)
+                'user': (
+                    created_by.get_full_name()
+                    if created_by else 'System'
+                ),
+
+                'user_role': (
+                    created_by.role.name
+                    if created_by and created_by.role
+                    else None
+                ),
             })
-        
+
         data['timeline'] = timeline
         data['lastUpdate'] = ticket.updated_at.isoformat()
-        
+
         return Response(data)
+
     except Ticket.DoesNotExist:
         return Response(
             {'error': f'Ticket "{ticket_number}" not found'},

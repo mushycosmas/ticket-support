@@ -1,7 +1,9 @@
-from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.models import AbstractUser, Permission
 from django.db import models
 from django.core.validators import RegexValidator, EmailValidator
 from django.utils import timezone
+
+from apps.roles.models import Role
 
 
 # ======================
@@ -11,7 +13,6 @@ class Team(models.Model):
     name = models.CharField(max_length=255, unique=True)
     description = models.TextField(blank=True, null=True)
 
-    # Team Lead
     lead = models.ForeignKey(
         'User',
         on_delete=models.SET_NULL,
@@ -37,37 +38,25 @@ class Team(models.Model):
 
 
 # ======================
-# 👤 USER MODEL
+# 👤 USER MODEL (RBAC CLEAN)
 # ======================
 class User(AbstractUser):
 
     # ======================
-    # ROLE
+    # ROLE (FROM ROLE TABLE)
     # ======================
-    ROLE_CHOICES = [
-        ('CUSTOMER', 'Customer'),
-        ('AGENT', 'Agent'),
-        ('TEAM_LEAD', 'Team Lead'),
-        ('QA_ANALYST', 'QA Analyst'),
-        ('MANAGER', 'Manager'),
-        ('ADMIN', 'Admin'),
-    ]
-
-    role = models.CharField(
-        max_length=20,
-        choices=ROLE_CHOICES,
-        default='AGENT'
-    )
-
-    # ======================
-    # RANK
-    # ======================
-    rank = models.CharField(
-        max_length=100,
+    role = models.ForeignKey(
+        Role,
+        on_delete=models.SET_NULL,
         null=True,
-        blank=True
+        blank=True,
+        related_name="users"
     )
-
+    rank = models.CharField(
+            max_length=50,
+            null=True,
+            blank=True
+     )
     # ======================
     # CONTACT
     # ======================
@@ -100,7 +89,7 @@ class User(AbstractUser):
     bio = models.TextField(max_length=500, blank=True, null=True)
 
     # ======================
-    # TEAM (ONE USER → ONE TEAM)
+    # TEAM
     # ======================
     team = models.ForeignKey(
         Team,
@@ -146,12 +135,29 @@ class User(AbstractUser):
         return self.get_full_name() or self.username
 
     @property
-    def role_display(self):
-        return dict(self.ROLE_CHOICES).get(self.role, self.role)
+    def role_name(self):
+        return self.role.name if self.role else None
 
     @property
     def team_name(self):
         return self.team.name if self.team else None
+
+    # ======================
+    # PERMISSIONS (DJANGO NATIVE)
+    # ======================
+    def get_role_permissions(self):
+        """
+        Returns permissions from Role (many-to-many)
+        """
+        if self.role:
+            return self.role.permissions.all()
+        return Permission.objects.none()
+
+    def has_role_permission(self, codename):
+        """
+        Check permission from Role
+        """
+        return self.get_role_permissions().filter(codename=codename).exists()
 
     # ======================
     # TICKET STATS
@@ -175,24 +181,6 @@ class User(AbstractUser):
     def resolved_tickets(self):
         from apps.tickets.models import Ticket
         return Ticket.objects.filter(assigned_to=self, status='RESOLVED').count()
-
-    # ======================
-    # PERMISSIONS
-    # ======================
-    def is_team_lead(self):
-        return self.role == 'TEAM_LEAD'
-
-    def is_agent(self):
-        return self.role == 'AGENT'
-
-    def is_admin(self):
-        return self.role == 'ADMIN' or self.is_superuser
-
-    def can_assign_tickets(self):
-        return self.role in ['ADMIN', 'TEAM_LEAD', 'MANAGER']
-
-    def can_view_all_tickets(self):
-        return self.role in ['ADMIN', 'MANAGER']
 
     # ======================
     # ACTIVITY
