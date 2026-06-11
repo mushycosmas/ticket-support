@@ -1,4 +1,3 @@
-# apps/tickets/urls.py
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views.customer_viewset import CustomerViewSet
@@ -12,13 +11,8 @@ router.register(r'customers', CustomerViewSet, basename='customer')
 router.register(r'issue-templates', IssueTemplateViewSet, basename='issue-template')
 
 urlpatterns = [
-    # Test endpoint
     path('test/', test_endpoint, name='test'),
-    
-    # Public tracking endpoints (must come BEFORE router URLs)
     path('tickets/track/', track_ticket, name='track-ticket'),
     path('tickets/track/<str:ticket_number>/', public_ticket_status, name='public-ticket-status'),
-    
-    # Main API endpoints
     path('', include(router.urls)),
 ]

@@ -7,7 +7,7 @@ User = get_user_model()
 
 
 # ======================
-# GENDER ENUM (FIXED)
+# GENDER ENUM
 # ======================
 class Gender(models.TextChoices):
     MALE = "M", "Male"
@@ -161,31 +161,41 @@ class Customer(models.Model):
         ])
 
     # ======================
-    # SMART GET OR CREATE
+    # SMART GET OR CREATE (FIXED: checks nida_number as well)
     # ======================
     @classmethod
     def get_or_create_customer(cls, email, phone, full_name=None, **kwargs):
-        customer = cls.objects.filter(
-            Q(email=email) | Q(phone=phone)
-        ).first()
+        nida = kwargs.get("nida_number")
+        # Build query: match email, phone, OR nida_number (if provided)
+        query = Q(email=email) | Q(phone=phone)
+        if nida:
+            query |= Q(nida_number=nida)
+        
+        customer = cls.objects.filter(query).first()
 
         if customer:
+            # Update existing customer with latest info
             customer.full_name = full_name or customer.full_name
             customer.email = email
             customer.phone = phone
-
-            for key, value in kwargs.items():
-                if value is not None:
-                    setattr(customer, key, value)
-
+            
+            # Update optional fields if provided and not None
+            if nida:
+                customer.nida_number = nida
+            if kwargs.get("gender"):
+                customer.gender = kwargs["gender"]
+            # Add any other fields you want to update here
+            
             customer.save()
             return customer, False
 
+        # Create new customer
         customer = cls.objects.create(
             full_name=full_name or "Unknown",
             email=email,
             phone=phone,
-            **kwargs
+            nida_number=nida,
+            gender=kwargs.get("gender"),
+            **{k: v for k, v in kwargs.items() if k not in ("nida_number", "gender")}
         )
-
         return customer, True

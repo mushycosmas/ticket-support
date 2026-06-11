@@ -1,55 +1,54 @@
 from django.db.models import Q
-from ..models import Ticket
+from ..models import Ticket   # ✅ add this line
 
 
 class TicketQuery:
+    """Filter and role‑based queryset builder."""
+
     def __init__(self, request):
         self.request = request
 
     def get_queryset(self):
         user = self.request.user
-
-        if not user.is_authenticated:
+        if not user or not user.is_authenticated:
             return Ticket.objects.none()
 
+        role = self._get_user_role(user)
         qs = Ticket.objects.select_related(
-            "team", "assigned_to", "customer", "street"
+            "team", "assigned_to", "assigned_by", "customer", "street"
         ).prefetch_related("attachments", "histories").order_by("-id")
-
-        role = self._get_role(user)
 
         if role == "ADMIN":
             return qs
-
-        if role == "TEAM_LEAD":
+        elif role == "TEAM_LEAD":
             return qs.filter(team_id=user.team_id)
-
-        if role == "AGENT":
+        elif role == "AGENT":
             return qs.filter(Q(assigned_to=user) | Q(assigned_to__isnull=True))
-
-        if role == "MANAGER":
+        elif role == "MANAGER":
             return qs.filter(team_id=user.team_id)
-
         return Ticket.objects.none()
 
-    def apply_filters(self, qs):
+    def apply_filters(self, queryset):
         params = self.request.query_params
+        status = params.get("status")
+        if status:
+            queryset = queryset.filter(status=status.upper())
+        priority = params.get("priority")
+        if priority:
+            queryset = queryset.filter(priority=priority.upper())
+        search = params.get("search")
+        if search:
+            queryset = queryset.filter(title__icontains=search)
+        if params.get("my") == "true":
+            queryset = queryset.filter(assigned_to=self.request.user)
+        return queryset
 
-        if params.get("filter") == "my":
-            qs = qs.filter(assigned_to=self.request.user)
-
-        if params.get("status"):
-            qs = qs.filter(status=params["status"].upper())
-
-        if params.get("priority"):
-            qs = qs.filter(priority=params["priority"].upper())
-
-        if params.get("search"):
-            qs = qs.filter(title__icontains=params["search"])
-
-        return qs
-
-    def _get_role(self, user):
+    def _get_user_role(self, user):
         if hasattr(user, "role") and user.role:
-            return getattr(user.role, "name", str(user.role)).upper()
+            if hasattr(user.role, "name"):
+                return user.role.name.upper()
+            elif isinstance(user.role, str):
+                return user.role.upper()
+        if hasattr(user, "role_name") and user.role_name:
+            return user.role_name.upper()
         return None

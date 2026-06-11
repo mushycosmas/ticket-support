@@ -1,22 +1,24 @@
 import uuid
+from django.utils import timezone
 from django.contrib.auth import get_user_model
+from django.db import transaction
+from rest_framework.exceptions import ValidationError
 
 from ..models import Ticket, Customer, TicketHistory
+from apps.users.models import Team
 
 User = get_user_model()
 
 
 # =========================
-# WORKFLOW LAYER
+# WORKFLOW LAYER (state machine)
 # =========================
 class TicketWorkflow:
-
-    @staticmethod
-    def can_assign(ticket):
-        return ticket.status == "OPEN"
+    """Valid transitions for ticket status."""
 
     @staticmethod
     def assign(ticket, user):
+        # No status check – allow assignment anytime
         ticket.status = "ASSIGNED"
         ticket.assigned_to = user
         ticket.save()
@@ -24,84 +26,87 @@ class TicketWorkflow:
 
     @staticmethod
     def start_progress(ticket):
-        if ticket.status == "ASSIGNED":
-            ticket.status = "IN_PROGRESS"
-            ticket.save()
+        if ticket.status != "ASSIGNED":
+            raise ValueError(f"Cannot start progress from status '{ticket.status}'")
+        ticket.status = "IN_PROGRESS"
+        ticket.save()
         return ticket
 
     @staticmethod
     def resolve(ticket):
+        if ticket.status not in ("IN_PROGRESS", "ASSIGNED", "OPEN"):
+            raise ValueError(f"Cannot resolve ticket with status '{ticket.status}'")
         ticket.status = "RESOLVED"
+        ticket.resolved_at = timezone.now()
         ticket.save()
         return ticket
 
     @staticmethod
     def close(ticket):
+        if ticket.status == "CLOSED":
+            return ticket
         ticket.status = "CLOSED"
+        ticket.save()
+        return ticket
+
+    @staticmethod
+    def reopen(ticket):
+        if ticket.status not in ("CLOSED", "RESOLVED"):
+            raise ValueError(f"Cannot reopen ticket with status '{ticket.status}'")
+        ticket.status = "OPEN"
+        ticket.resolved_at = None
         ticket.save()
         return ticket
 
 
 # =========================
-# SERVICE LAYER
+# SERVICE LAYER (business logic)
 # =========================
 class TicketService:
+    """Handles all ticket operations and delegates state changes to workflow."""
 
     @staticmethod
     def safe_int(value):
+        """Convert to int safely, return None for invalid input."""
+        if value in (None, "", "null", "undefined"):
+            return None
         try:
-            if value in [None, "", "null", "undefined"]:
-                return None
             return int(value)
         except (TypeError, ValueError):
             return None
 
-    # =========================
-    # CREATE TICKET
-    # =========================
+    # ---------- CREATE ----------
     @staticmethod
+    @transaction.atomic
     def create_ticket(request):
         data = request.data
 
+        # Customer handling
         email = data.get("customer_email")
         phone = data.get("customer_phone")
         name = data.get("customer_name")
 
-        # =========================
-        # CUSTOMER
-        # =========================
         customer = None
         if email or phone:
             customer, _ = Customer.get_or_create_customer(
                 email=email,
                 phone=phone,
                 full_name=name,
-
-                # FIXED FIELD MAPPING
                 nida_number=data.get("customer_nida"),
                 gender=data.get("customer_gender"),
-                created_by_id=request.user if request.user.is_authenticated else None,
+                created_by_id=request.user.id if request.user.is_authenticated else None,
             )
 
-        # =========================
-        # SAFE FK HANDLING (IMPORTANT FIX HERE)
-        # =========================
-        category_id = TicketService.safe_int(
-            data.get("category_id") or data.get("category")
-        )
-
-        channel_id = TicketService.safe_int(
-            data.get("channel_id") or data.get("channel")
-        )
-
+        # Foreign keys
+        category_id = TicketService.safe_int(data.get("category_id") or data.get("category"))
+        channel_id = TicketService.safe_int(data.get("channel_id") or data.get("channel"))
         street_id = TicketService.safe_int(data.get("street_id"))
         team_id = TicketService.safe_int(data.get("team"))
         assigned_to_id = TicketService.safe_int(data.get("assigned_to"))
         assigned_by_id = TicketService.safe_int(data.get("assigned_by"))
-       
-        # =========================
-        # CREATE TICKET
-        # =========================
+        template_id = TicketService.safe_int(data.get("template"))
+
+        # Create ticket
         ticket = Ticket.objects.create(
             ticket_number=f"TKT-{uuid.uuid4().hex[:8].upper()}",
             title=data.get("title"),
@@ -112,57 +117,179 @@ class TicketService:
             channel_id=channel_id,
             street_id=street_id,
             customer=customer,
-           
+            template_id=template_id,
         )
 
-        # =========================
-        # RELATIONSHIPS
-        # =========================
-        TicketService.assign_relationships(
-            ticket,
-            assigned_to_id,
-            assigned_by_id,
-            team_id,
-            request
-        )
+        # Assign relationships
+        TicketService._assign_relationships(ticket, assigned_to_id, assigned_by_id, team_id, request)
 
-        # =========================
-        # HISTORY
-        # =========================
+        # History (with metadata)
         TicketHistory.objects.create(
             ticket=ticket,
             action="CREATED",
             created_by=request.user if request.user.is_authenticated else None,
+            metadata={
+                "title": ticket.title,
+                "description": ticket.description,
+                "street_id": street_id,
+                "assigned_to": assigned_to_id,
+                "assigned_by": assigned_by_id,
+                "team_id": team_id, 
+                "template_id": template_id, 
+            }
         )
 
         return ticket
 
-    # =========================
-    # ASSIGN RELATIONSHIPS
-    # =========================
     @staticmethod
-    def assign_relationships(ticket, assigned_to_id, assigned_by_id, team_id, request):
-
-        # ASSIGNED TO
+    def _assign_relationships(ticket, assigned_to_id, assigned_by_id, team_id, request):
         if assigned_to_id:
-            try:
-                user = User.objects.get(id=assigned_to_id)
+            user = User.objects.filter(id=assigned_to_id).first()
+            if user:
                 ticket.assigned_to = user
                 ticket.status = "IN_PROGRESS"
-            except User.DoesNotExist:
-                pass
-
-        # ASSIGNED BY
         if assigned_by_id:
-            try:
-                ticket.assigned_by = User.objects.get(id=assigned_by_id)
-            except User.DoesNotExist:
-                pass
+            by_user = User.objects.filter(id=assigned_by_id).first()
+            if by_user:
+                ticket.assigned_by = by_user
         elif request.user.is_authenticated:
             ticket.assigned_by = request.user
-
-        # TEAM
         if team_id:
             ticket.team_id = team_id
+        ticket.save(update_fields=["assigned_to", "assigned_by", "team_id", "status"])
 
-        ticket.save()
+    # ---------- STATE CHANGES (with comment support) ----------
+    @staticmethod
+    def resolve(ticket, request, comment=""):
+        old_status = ticket.status
+        try:
+            ticket = TicketWorkflow.resolve(ticket)
+        except ValueError as e:
+            raise ValueError(str(e))
+        TicketHistory.objects.create(
+            ticket=ticket,
+            action="RESOLVED",
+            comment=comment,
+            old_status=old_status,
+            new_status=ticket.status,
+            created_by=request.user if request.user.is_authenticated else None,
+            metadata={"comment": comment}
+        )
+        return ticket
+
+    @staticmethod
+    def close(ticket, request, comment=""):
+        old_status = ticket.status
+        ticket = TicketWorkflow.close(ticket)
+        TicketHistory.objects.create(
+            ticket=ticket,
+            action="CLOSED",
+            comment=comment,
+            old_status=old_status,
+            new_status=ticket.status,
+            created_by=request.user if request.user.is_authenticated else None,
+            metadata={"comment": comment}
+        )
+        return ticket
+
+    @staticmethod
+    def reopen(ticket, request, comment=""):
+        old_status = ticket.status
+        try:
+            ticket = TicketWorkflow.reopen(ticket)
+        except ValueError as e:
+            raise ValueError(str(e))
+        TicketHistory.objects.create(
+            ticket=ticket,
+            action="REOPENED",
+            comment=comment,
+            old_status=old_status,
+            new_status=ticket.status,
+            created_by=request.user if request.user.is_authenticated else None,
+            metadata={"comment": comment}
+        )
+        return ticket
+
+    # ---------- ASSIGN (supports both agent and team) ----------
+    @staticmethod
+    def assign(ticket, request):
+        assign_type = request.data.get("type")
+        obj_id = request.data.get("id")
+
+        if not assign_type or not obj_id:
+            raise ValidationError("type and id are required")
+
+        # ======================
+        # TEAM ASSIGNMENT
+        # ======================
+        if assign_type == "team":
+            try:
+                team = Team.objects.get(id=obj_id)
+            except Team.DoesNotExist:
+                raise ValidationError("Team not found")
+
+            ticket.team = team
+            ticket.assigned_to = None
+            ticket.save(update_fields=["team", "assigned_to"])
+
+            TicketHistory.objects.create(
+                ticket=ticket,
+                action="ASSIGNED",
+                comment=f"Assigned to team {team.name}",
+                created_by=request.user if request.user.is_authenticated else None,
+                metadata={"type": "team", "team_id": team.id}
+            )
+
+            return ticket
+
+        # ======================
+        # AGENT ASSIGNMENT
+        # ======================
+        if assign_type == "agent":
+            try:
+                agent = User.objects.get(id=obj_id)
+            except User.DoesNotExist:
+                raise ValidationError("User not found")
+
+            # Verify agent role
+            role_name = None
+            if hasattr(agent, "role") and agent.role:
+                role_name = agent.role.name.upper() if hasattr(agent.role, "name") else str(agent.role).upper()
+            elif hasattr(agent, "role_name") and agent.role_name:
+                role_name = agent.role_name.upper()
+
+            if role_name != "AGENT":
+                raise ValidationError("Only agents can be assigned")
+
+            old_assignee = ticket.assigned_to
+            ticket = TicketWorkflow.assign(ticket, agent)
+            ticket.team = None
+            ticket.assigned_by = request.user if request.user.is_authenticated else None
+            ticket.save()
+
+            TicketHistory.objects.create(
+                ticket=ticket,
+                action="ASSIGNED",
+                old_assignee=str(old_assignee) if old_assignee else None,
+                new_assignee=str(agent),
+                created_by=request.user if request.user.is_authenticated else None,
+                metadata={"type": "agent", "agent_id": agent.id}
+            )
+
+            return ticket
+
+        raise ValidationError("Invalid type. Use 'agent' or 'team'")
+
+    # ---------- ADD COMMENT ----------
+    @staticmethod
+    def add_comment(ticket, request):
+        comment = request.data.get("comment")
+        if not comment:
+            raise ValueError("Comment text is required")
+        history = TicketHistory.objects.create(
+            ticket=ticket,
+            action="COMMENTED",
+            comment=comment,
+            created_by=request.user if request.user.is_authenticated else None,
+        )
+        return history

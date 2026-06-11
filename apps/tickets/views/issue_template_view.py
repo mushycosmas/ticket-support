@@ -19,7 +19,7 @@ class IssueTemplatePagination(PageNumberPagination):
 # ======================
 class IssueTemplateViewSet(viewsets.ModelViewSet):
     serializer_class = IssueTemplateSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [permissions.AllowAny]  # 👈 make public
     pagination_class = IssueTemplatePagination
 
     def get_queryset(self):
