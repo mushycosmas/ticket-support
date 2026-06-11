@@ -1,3 +1,4 @@
+# apps/tickets/views/customer_viewset.py
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -17,7 +18,7 @@ class CustomerViewSet(viewsets.GenericViewSet):
     permission_classes = [IsAuthenticated]
 
     # =========================
-    # QUERYSET BASED ON ROLE
+    # QUERYSET BASED ON ROLE (FIXED)
     # =========================
     def get_queryset(self):
         user = self.request.user
@@ -25,17 +26,18 @@ class CustomerViewSet(viewsets.GenericViewSet):
         if not user or not user.is_authenticated:
             return Customer.objects.none()
 
-        role = str(getattr(user, "role", "")).upper()
+        # Get role name safely (since role is a ForeignKey to Role model)
+        role_name = user.role.name if user.role else None
 
-        if role == "ADMIN":
+        if role_name == "ADMIN":
             return Customer.objects.all()
 
-        elif role == "TEAM_LEAD":
+        elif role_name == "TEAM_LEAD":
             return Customer.objects.filter(
                 tickets__team_id=user.team_id
             ).distinct()
 
-        elif role == "AGENT":
+        elif role_name == "AGENT":
             return Customer.objects.filter(
                 tickets__assigned_to=user
             ).distinct()
@@ -48,19 +50,26 @@ class CustomerViewSet(viewsets.GenericViewSet):
     def list(self, request):
         customers = self.get_queryset()
 
+        # Search (including nida_number)
         search = request.query_params.get("search", "")
         if search:
             customers = customers.filter(
                 Q(full_name__icontains=search) |
                 Q(email__icontains=search) |
                 Q(phone__icontains=search) |
-                Q(company_name__icontains=search)
+                Q(company_name__icontains=search) |
+                Q(nida_number__icontains=search)
             )
+
+        # Gender filter
+        gender = request.query_params.get("gender")
+        if gender:
+            customers = customers.filter(gender=gender)
 
         order_by = request.query_params.get("order_by", "-created_at")
         customers = customers.order_by(order_by)
 
-        # SAFE PAGINATION
+        # Pagination
         try:
             page = int(request.query_params.get("page", 1))
             page_size = int(request.query_params.get("page_size", 20))
@@ -113,7 +122,6 @@ class CustomerViewSet(viewsets.GenericViewSet):
         end = start + page_size
 
         customer_data = CustomerSerializer(customer).data
-
         customer_data["tickets"] = {
             "count": tickets.count(),
             "page": page,
@@ -166,7 +174,7 @@ class CustomerViewSet(viewsets.GenericViewSet):
         })
 
     # =========================
-    # SEARCH CUSTOMERS
+    # SEARCH CUSTOMERS (includes NIDA)
     # =========================
     @action(detail=False, methods=["get"])
     def search(self, request):
@@ -182,7 +190,8 @@ class CustomerViewSet(viewsets.GenericViewSet):
             Q(full_name__icontains=query) |
             Q(email__icontains=query) |
             Q(phone__icontains=query) |
-            Q(company_name__icontains=query)
+            Q(company_name__icontains=query) |
+            Q(nida_number__icontains=query)
         )
 
         serializer = CustomerSerializer(customers[:20], many=True)

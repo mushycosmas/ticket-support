@@ -10,16 +10,23 @@ from .issue_template_serializer import IssueTemplateSerializer
 class TicketSerializer(serializers.ModelSerializer):
 
     # =====================
-    # CUSTOMER
+    # CUSTOMER (read & write)
     # =====================
     customer_detail = CustomerSerializer(source="customer", read_only=True)
 
     customer_email = serializers.EmailField(write_only=True, required=True)
     customer_name = serializers.CharField(write_only=True, required=False, allow_blank=True)
     customer_phone = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    customer_nida = serializers.CharField(write_only=True, required=False, allow_blank=True, allow_null=True)
+    customer_gender = serializers.ChoiceField(
+        choices=['M', 'F', 'O', 'N'],
+        write_only=True,
+        required=False,
+        allow_null=True
+    )
 
     # =====================
-    # TEMPLATE (NEW)
+    # TEMPLATE
     # =====================
     template_id = serializers.PrimaryKeyRelatedField(
         queryset=IssueTemplate.objects.all(),
@@ -28,7 +35,6 @@ class TicketSerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True
     )
-
     template_name = serializers.CharField(source="template.name", read_only=True)
     template_detail = IssueTemplateSerializer(source="template", read_only=True)
 
@@ -42,12 +48,10 @@ class TicketSerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True
     )
-
     street_name = serializers.CharField(source="street.name", read_only=True)
     ward_name = serializers.CharField(source="street.ward.name", read_only=True)
     district_name = serializers.CharField(source="street.ward.district.name", read_only=True)
     region_name = serializers.CharField(source="street.ward.district.region.name", read_only=True)
-
     location_full = serializers.SerializerMethodField()
     location_details = serializers.SerializerMethodField()
 
@@ -70,29 +74,35 @@ class TicketSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         files = request.FILES.getlist("file") if request else []
 
+        # Extract customer data
         email = validated_data.pop("customer_email")
         name = validated_data.pop("customer_name", None)
         phone = validated_data.pop("customer_phone", None)
+        nida = validated_data.pop("customer_nida", None)
+        gender = validated_data.pop("customer_gender", None)
 
         template = validated_data.get("template", None)
 
-        # AUTO FILL FROM TEMPLATE
+        # Auto fill from template
         if template:
             validated_data.setdefault("title", template.name)
             validated_data.setdefault("description", template.description)
             validated_data.setdefault("priority", template.suggested_priority)
             validated_data.setdefault("category", template.category)
 
+        # Create or get customer with extra fields
         customer, _ = Customer.get_or_create_customer(
             email=email,
             phone=phone,
-            full_name=name
+            full_name=name,
+            nida_number=nida,
+            gender=gender
         )
 
         validated_data["customer"] = customer
         ticket = Ticket.objects.create(**validated_data)
 
-        # attachments
+        # Attachments
         for f in files:
             TicketAttachment.objects.create(
                 ticket=ticket,
@@ -101,7 +111,7 @@ class TicketSerializer(serializers.ModelSerializer):
                 uploaded_by=request.user if request and request.user.is_authenticated else None
             )
 
-        # history
+        # History
         TicketHistory.objects.create(
             ticket=ticket,
             action="CREATED",
@@ -118,13 +128,20 @@ class TicketSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         old_status = instance.status
 
+        # Update customer if email is provided
         email = validated_data.pop("customer_email", None)
-
         if email:
+            name = validated_data.pop("customer_name", None)
+            phone = validated_data.pop("customer_phone", None)
+            nida = validated_data.pop("customer_nida", None)
+            gender = validated_data.pop("customer_gender", None)
+
             customer, _ = Customer.get_or_create_customer(
                 email=email,
-                phone=validated_data.pop("customer_phone", None),
-                full_name=validated_data.pop("customer_name", None)
+                phone=phone,
+                full_name=name,
+                nida_number=nida,
+                gender=gender
             )
             instance.customer = customer
 
@@ -156,25 +173,22 @@ class TicketSerializer(serializers.ModelSerializer):
     def get_location_full(self, obj):
         if not obj.street:
             return None
-
         parts = [
-            obj.street.name if obj.street else None,
-            obj.street.ward.name if obj.street and obj.street.ward else None,
-            obj.street.ward.district.name if obj.street and obj.street.ward and obj.street.ward.district else None,
-            obj.street.ward.district.region.name if obj.street and obj.street.ward and obj.street.ward.district and obj.street.ward.district.region else None,
+            obj.street.name,
+            obj.street.ward.name if obj.street.ward else None,
+            obj.street.ward.district.name if obj.street.ward and obj.street.ward.district else None,
+            obj.street.ward.district.region.name if obj.street.ward and obj.street.ward.district and obj.street.ward.district.region else None,
         ]
-
-        return ", ".join([p for p in parts if p])
+        return ", ".join(p for p in parts if p)
 
     def get_location_details(self, obj):
         if not obj.street:
             return None
-
         return {
-            "street": obj.street.name if obj.street else None,
-            "ward": obj.street.ward.name if obj.street and obj.street.ward else None,
-            "district": obj.street.ward.district.name if obj.street and obj.street.ward and obj.street.ward.district else None,
-            "region": obj.street.ward.district.region.name if obj.street and obj.street.ward and obj.street.ward.district and obj.street.ward.district.region else None,
+            "street": obj.street.name,
+            "ward": obj.street.ward.name if obj.street.ward else None,
+            "district": obj.street.ward.district.name if obj.street.ward and obj.street.ward.district else None,
+            "region": obj.street.ward.district.region.name if obj.street.ward and obj.street.ward.district and obj.street.ward.district.region else None,
         }
 
     class Meta:
@@ -197,6 +211,8 @@ class TicketSerializer(serializers.ModelSerializer):
             "customer_email",
             "customer_name",
             "customer_phone",
+            "customer_nida",
+            "customer_gender",
 
             # template
             "template",
@@ -225,7 +241,6 @@ class TicketSerializer(serializers.ModelSerializer):
             "attachments",
             "history",
         ]
-
         extra_kwargs = {
             "customer": {"required": False, "allow_null": True},
         }

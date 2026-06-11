@@ -6,6 +6,17 @@ from django.contrib.auth import get_user_model
 User = get_user_model()
 
 
+# ======================
+# GENDER ENUM (FIXED)
+# ======================
+class Gender(models.TextChoices):
+    MALE = "M", "Male"
+    FEMALE = "F", "Female"
+
+
+# ======================
+# CUSTOMER MODEL
+# ======================
 class Customer(models.Model):
     """Customer model to store customer information separately from tickets"""
 
@@ -23,11 +34,29 @@ class Customer(models.Model):
         max_length=20,
         validators=[
             RegexValidator(
-                regex=r'^\+?1?\d{9,15}$',
+                regex=r"^\+?1?\d{9,15}$",
                 message="Phone number must be in international format"
             )
         ],
         db_index=True
+    )
+
+    # ======================
+    # IDENTITY FIELDS
+    # ======================
+    nida_number = models.CharField(
+        max_length=20,
+        unique=True,
+        blank=True,
+        null=True,
+        help_text="National ID number (NIDA)"
+    )
+
+    gender = models.CharField(
+        max_length=1,
+        choices=Gender.choices,
+        null=True,
+        blank=True
     )
 
     # ======================
@@ -42,7 +71,7 @@ class Customer(models.Model):
     address = models.TextField(blank=True, null=True)
     city = models.CharField(max_length=100, blank=True, null=True)
     state = models.CharField(max_length=100, blank=True, null=True)
-    country = models.CharField(max_length=100, default='Tanzania')
+    country = models.CharField(max_length=100, default="Tanzania")
     postal_code = models.CharField(max_length=20, blank=True, null=True)
 
     # ======================
@@ -51,15 +80,15 @@ class Customer(models.Model):
     preferred_contact_method = models.CharField(
         max_length=20,
         choices=[
-            ('EMAIL', 'Email'),
-            ('PHONE', 'Phone'),
-            ('SMS', 'SMS'),
-            ('WHATSAPP', 'WhatsApp')
+            ("EMAIL", "Email"),
+            ("PHONE", "Phone"),
+            ("SMS", "SMS"),
+            ("WHATSAPP", "WhatsApp"),
         ],
-        default='EMAIL'
+        default="EMAIL"
     )
 
-    preferred_language = models.CharField(max_length=10, default='en')
+    preferred_language = models.CharField(max_length=10, default="en")
 
     # ======================
     # META DATA
@@ -71,7 +100,7 @@ class Customer(models.Model):
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        related_name='customers_created'
+        related_name="customers_created"
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
@@ -82,16 +111,25 @@ class Customer(models.Model):
     # ======================
     # STATISTICS
     # ======================
-    total_tickets = models.IntegerField(default=0)
-    total_resolved = models.IntegerField(default=0)
-    total_open = models.IntegerField(default=0)
+    total_tickets = models.PositiveIntegerField(default=0)
+    total_resolved = models.PositiveIntegerField(default=0)
+    total_open = models.PositiveIntegerField(default=0)
 
+    # ======================
+    # META
+    # ======================
     class Meta:
-        ordering = ['-created_at']
+        ordering = ["-created_at"]
         indexes = [
-            models.Index(fields=['email']),
-            models.Index(fields=['phone']),
-            models.Index(fields=['full_name']),
+            models.Index(fields=["email"]),
+            models.Index(fields=["phone"]),
+            models.Index(fields=["full_name"]),
+        ]
+        constraints = [
+            models.CheckConstraint(
+                check=Q(gender__in=Gender.values) | Q(gender__isnull=True),
+                name="valid_gender_constraint",
+            )
         ]
         verbose_name = "Customer"
         verbose_name_plural = "Customers"
@@ -106,20 +144,20 @@ class Customer(models.Model):
         from .ticket import Ticket
 
         self.total_tickets = self.tickets.count()
-        self.total_resolved = self.tickets.filter(status='RESOLVED').count()
+        self.total_resolved = self.tickets.filter(status="RESOLVED").count()
         self.total_open = self.tickets.filter(
-            status__in=['OPEN', 'ASSIGNED', 'IN_PROGRESS']
+            status__in=["OPEN", "ASSIGNED", "IN_PROGRESS"]
         ).count()
 
-        last_ticket = self.tickets.order_by('-created_at').first()
+        last_ticket = self.tickets.order_by("-created_at").first()
         if last_ticket:
             self.last_ticket_created = last_ticket.created_at
 
         self.save(update_fields=[
-            'total_tickets',
-            'total_resolved',
-            'total_open',
-            'last_ticket_created'
+            "total_tickets",
+            "total_resolved",
+            "total_open",
+            "last_ticket_created",
         ])
 
     # ======================
@@ -127,24 +165,18 @@ class Customer(models.Model):
     # ======================
     @classmethod
     def get_or_create_customer(cls, email, phone, full_name=None, **kwargs):
-        """
-        RULE:
-        - If email OR phone exists → reuse customer
-        - Otherwise create new customer
-        """
-
         customer = cls.objects.filter(
             Q(email=email) | Q(phone=phone)
         ).first()
 
         if customer:
-            # update latest info
             customer.full_name = full_name or customer.full_name
             customer.email = email
             customer.phone = phone
 
             for key, value in kwargs.items():
-                setattr(customer, key, value)
+                if value is not None:
+                    setattr(customer, key, value)
 
             customer.save()
             return customer, False
