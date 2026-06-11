@@ -80,6 +80,7 @@ class TicketService:
                 # FIXED FIELD MAPPING
                 nida_number=data.get("customer_nida"),
                 gender=data.get("customer_gender"),
+                created_by_id=request.user if request.user.is_authenticated else None,
             )
 
         # =========================
@@ -97,7 +98,7 @@ class TicketService:
         team_id = TicketService.safe_int(data.get("team"))
         assigned_to_id = TicketService.safe_int(data.get("assigned_to"))
         assigned_by_id = TicketService.safe_int(data.get("assigned_by"))
-
+       
         # =========================
         # CREATE TICKET
         # =========================
@@ -107,12 +108,11 @@ class TicketService:
             description=data.get("description", ""),
             priority=data.get("priority", "MEDIUM"),
             status="OPEN",
-
             category_id=category_id,
             channel_id=channel_id,
             street_id=street_id,
-
             customer=customer,
+           
         )
 
         # =========================
