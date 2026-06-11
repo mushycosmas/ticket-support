@@ -1,12 +1,15 @@
+# apps/tickets/urls.py
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views.ticket_viewset import TicketViewSet
 from .views.customer_viewset import CustomerViewSet
+from .views.ticket_viewset import TicketViewSet
+from .views.issue_template_view import IssueTemplateViewSet
 from .views.public_views import track_ticket, public_ticket_status, test_endpoint
 
 router = DefaultRouter()
 router.register(r'tickets', TicketViewSet, basename='ticket')
 router.register(r'customers', CustomerViewSet, basename='customer')
+router.register(r'issue-templates', IssueTemplateViewSet, basename='issue-template')
 
 urlpatterns = [
     # Test endpoint

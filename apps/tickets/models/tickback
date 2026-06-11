@@ -1,6 +1,7 @@
 from django.db import models
 from django.utils import timezone
 
+from .choices import TicketChannel, TicketStatus, TicketPriority
 from .base import TimeStampedModel
 
 USER_MODEL = "users.User"
@@ -11,15 +12,8 @@ CUSTOMER_MODEL = "Customer"
 
 class Ticket(TimeStampedModel):
     """
-    Ticket model (ITSM-ready structure)
-
-    Supports:
-    - Customer tickets
-    - Teams & assignment
-    - Street location
-    - Issue templates
-    - Categories
-    - Channel-based routing
+    Ticket model linked ONLY to Customer.
+    No duplicate customer fields allowed here.
     """
 
     # ======================
@@ -75,52 +69,27 @@ class Ticket(TimeStampedModel):
     )
 
     # ======================
-    # ISSUE TEMPLATE (NEW)
-    # ======================
-    template = models.ForeignKey(
-        "tickets.IssueTemplate",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="tickets"
-    )
-
-    # ======================
-    # CATEGORY (NEW)
-    # ======================
-    category = models.ForeignKey(
-        "categories.Category",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="tickets"
-    )
-
-    # ======================
-    # CHANNEL (NOW MODEL-BASED)
-    # ======================
-    channel = models.ForeignKey(
-        "channels.Channel",
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="tickets"
-    )
-
-    # ======================
     # TICKET DETAILS
     # ======================
+    channel = models.CharField(
+        max_length=20,
+        choices=TicketChannel.CHOICES,
+        default='WEB'
+    )
+
     title = models.CharField(max_length=255)
     description = models.TextField()
 
     priority = models.CharField(
         max_length=20,
-        default="MEDIUM"
+        choices=TicketPriority.CHOICES,
+        default='MEDIUM'
     )
 
     status = models.CharField(
         max_length=20,
-        default="OPEN"
+        choices=TicketStatus.CHOICES,
+        default='OPEN'
     )
 
     # ======================
@@ -136,8 +105,7 @@ class Ticket(TimeStampedModel):
     # ======================
     def save(self, *args, **kwargs):
         """
-        Auto-generate ticket number
-        Update customer statistics
+        Auto-generate ticket number and update customer stats.
         """
 
         if not self.ticket_number:
@@ -169,7 +137,7 @@ class Ticket(TimeStampedModel):
         return f"TKT-{today}-{last_number + 1:06d}"
 
     # ======================
-    # HELPERS
+    # HELPER PROPERTIES
     # ======================
     @property
     def customer_name(self):
