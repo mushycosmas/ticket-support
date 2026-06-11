@@ -3,7 +3,9 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework import status
 
-from ..models import Ticket
+from django.db.models import Q
+
+from ..models import Ticket, Customer
 from ..serializers import TicketSerializer
 
 
@@ -24,32 +26,74 @@ def test_endpoint(request):
             'resolve_ticket': 'POST /api/tickets/tickets/{id}/resolve/',
             'close_ticket': 'POST /api/tickets/tickets/{id}/close/',
             'list_customers': 'GET /api/tickets/customers/',
-            'track_ticket': 'GET /api/tickets/tickets/track/?ticket_number=XXX'
+            'track_ticket': 'GET /api/tickets/tickets/track/?query=XXX'
         }
     })
 
 
 # =========================
-# TRACK TICKET (FIXED ROLE BUG)
+# TRACK TICKET (SMART SEARCH)
 # =========================
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def track_ticket(request):
-    """Public endpoint to track ticket status"""
+    """
+    Public endpoint to track ticket by:
+    - ticket_number
+    - customer phone
+    - customer nida
+    """
 
-    ticket_number = request.query_params.get('ticket_number')
+    query = (
+        request.query_params.get('query')
+        or request.query_params.get('ticket_number')
+        or request.query_params.get('phone')
+        or request.query_params.get('nida')
+    )
 
-    if not ticket_number:
+    if not query:
         return Response(
-            {'error': 'ticket_number is required'},
+            {
+                'error': 'query is required (ticket_number, phone, or nida)'
+            },
             status=status.HTTP_400_BAD_REQUEST
         )
 
     try:
-        ticket = Ticket.objects.get(ticket_number=ticket_number)
+        # =========================
+        # STEP 1: FIND BY TICKET NUMBER
+        # =========================
+        ticket = Ticket.objects.filter(
+            ticket_number=query
+        ).select_related('customer').first()
+
+        # =========================
+        # STEP 2: FIND BY CUSTOMER PHONE OR NIDA
+        # =========================
+        if not ticket:
+            ticket = Ticket.objects.filter(
+                Q(customer__phone=query) |
+                Q(customer__nida_number=query)
+            ).select_related('customer').first()
+
+        # =========================
+        # NOT FOUND
+        # =========================
+        if not ticket:
+            return Response(
+                {'error': f'No ticket found for "{query}"'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # =========================
+        # SERIALIZE TICKET
+        # =========================
         serializer = TicketSerializer(ticket)
         data = serializer.data
 
+        # =========================
+        # BUILD TIMELINE
+        # =========================
         timeline = []
 
         for history in ticket.histories.all().order_by('created_at'):
@@ -63,13 +107,12 @@ def track_ticket(request):
                 'type': history.display_type,
                 'comment': history.comment,
 
-                # ✅ SAFE USER FIELDS
+                # SAFE USER DATA
                 'user': (
                     created_by.get_full_name()
                     if created_by else 'System'
                 ),
 
-                # ✅ FIXED ROLE SERIALIZATION BUG
                 'user_role': (
                     created_by.role.name
                     if created_by and created_by.role
@@ -90,12 +133,6 @@ def track_ticket(request):
 
         return Response(data)
 
-    except Ticket.DoesNotExist:
-        return Response(
-            {'error': f'Ticket "{ticket_number}" not found'},
-            status=status.HTTP_404_NOT_FOUND
-        )
-
     except Exception as e:
         print(f"Error in track_ticket: {e}")
         return Response(
@@ -105,15 +142,24 @@ def track_ticket(request):
 
 
 # =========================
-# PUBLIC STATUS ENDPOINT
+# PUBLIC STATUS (OPTIONAL)
 # =========================
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def public_ticket_status(request, ticket_number):
-    """Alternative public tracking endpoint using URL parameter"""
+    """Direct ticket lookup via URL param"""
 
     try:
-        ticket = Ticket.objects.get(ticket_number=ticket_number)
+        ticket = Ticket.objects.filter(
+            ticket_number=ticket_number
+        ).select_related('customer').first()
+
+        if not ticket:
+            return Response(
+                {'error': f'Ticket "{ticket_number}" not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
         serializer = TicketSerializer(ticket)
         data = serializer.data
 
@@ -129,18 +175,8 @@ def public_ticket_status(request, ticket_number):
                 'message': history.display_message,
                 'type': history.display_type,
                 'comment': history.comment,
-
-                # (optional safe fields)
-                'user': (
-                    created_by.get_full_name()
-                    if created_by else 'System'
-                ),
-
-                'user_role': (
-                    created_by.role.name
-                    if created_by and created_by.role
-                    else None
-                ),
+                'user': created_by.get_full_name() if created_by else 'System',
+                'user_role': created_by.role.name if created_by and created_by.role else None,
             })
 
         data['timeline'] = timeline
@@ -148,8 +184,9 @@ def public_ticket_status(request, ticket_number):
 
         return Response(data)
 
-    except Ticket.DoesNotExist:
+    except Exception as e:
+        print(f"Error in public_ticket_status: {e}")
         return Response(
-            {'error': f'Ticket "{ticket_number}" not found'},
-            status=status.HTTP_404_NOT_FOUND
+            {'error': 'Internal server error'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
