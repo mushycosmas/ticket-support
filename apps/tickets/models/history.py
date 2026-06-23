@@ -29,7 +29,8 @@ class TicketHistory(AuditableModel):
     new_priority = models.CharField(max_length=20, null=True, blank=True)
     old_assignee = models.CharField(max_length=255, null=True, blank=True)
     new_assignee = models.CharField(max_length=255, null=True, blank=True)
-    
+    old_team = models.CharField(max_length=255, blank=True, null=True)
+    new_team = models.CharField(max_length=255, blank=True, null=True)
     # Content
     comment = models.TextField(null=True, blank=True, validators=[MinLengthValidator(1)])
     metadata = models.JSONField(default=dict, blank=True)

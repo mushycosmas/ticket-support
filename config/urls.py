@@ -40,7 +40,7 @@ urlpatterns = [
      #priority
      path('api/priorities/', include('apps.priorities.urls')),
      #roles
-     path("api/roles/", include("apps.roles.urls")),
+     path("api/", include("apps.roles.urls")),
      #permissions
   
   

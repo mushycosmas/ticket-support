@@ -37,7 +37,7 @@ class TeamViewSet(
     def list(self, request, *args, **kwargs):
         """List all teams with pagination"""
         queryset = self.get_queryset()
-        
+        print("kelvin")
         # Apply search filter
         search = request.query_params.get('search')
         if search:
@@ -285,3 +285,14 @@ class TeamViewSet(
         
         serializer = UserSerializer(users, many=True)
         return Response(serializer.data)
+
+    @action(detail=False, methods=['get'])
+    def all_teams(self, request):
+        teams = Team.objects.all().order_by("name")
+
+        serializer = TeamSerializer(teams, many=True)
+
+        return Response({
+            "count": teams.count(),
+            "results": serializer.data
+    })

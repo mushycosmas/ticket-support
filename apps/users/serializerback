@@ -1,0 +1,171 @@
+from rest_framework import serializers
+
+from .models import User, Team
+from apps.roles.models import Role
+
+
+# ==========================
+# TEAM MEMBER SERIALIZER
+# ==========================
+class TeamMemberSerializer(serializers.ModelSerializer):
+    full_name = serializers.SerializerMethodField()
+
+    # ✅ FIXED: changed from role.id → role_id (safe DB column)
+    role_id = serializers.IntegerField(source="role_id", read_only=True)
+
+    # ⚠️ KEEP BUT SAFE (uses FK relation, not raw column)
+    role_name = serializers.CharField(source="role.name", read_only=True)
+
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "username",
+            "email",
+            "first_name",
+            "last_name",
+            "full_name",
+            "rank",
+            "profile_picture",
+
+            # role fields
+            "role_id",
+            "role_name",
+        ]
+
+    def get_full_name(self, obj):
+        return obj.get_full_name() or obj.username
+
+
+# ==========================
+# TEAM SERIALIZER
+# ==========================
+class TeamSerializer(serializers.ModelSerializer):
+    member_count = serializers.IntegerField(read_only=True)
+
+    lead_name = serializers.SerializerMethodField()
+
+    members = TeamMemberSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Team
+        fields = [
+            "id",
+            "name",
+            "description",
+            "lead",
+            "lead_name",
+            "member_count",
+            "members",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_lead_name(self, obj):
+        if obj.lead:
+            return obj.lead.get_full_name() or obj.lead.username
+        return None
+
+
+# ==========================
+# ROLE SERIALIZER
+# ==========================
+class RoleSerializer(serializers.ModelSerializer):
+    permissions = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Role
+        fields = [
+            "id",
+            "name",
+            "description",
+            "permissions",
+        ]
+
+    def get_permissions(self, obj):
+        return list(
+            obj.permissions.values_list(
+                "codename",
+                flat=True
+            )
+        )
+
+
+# ==========================
+# USER SERIALIZER
+# ==========================
+class UserSerializer(serializers.ModelSerializer):
+    full_name = serializers.SerializerMethodField()
+
+    # ==========================
+    # FIXED: role mapping
+    # ==========================
+
+    # ❌ OLD: source="role.id" (caused SQL error)
+    # ✔ NEW: use real DB column
+    role_id = serializers.IntegerField(source="role_id", read_only=True)
+
+    # ⚠️ SAFE: still uses relation, but ok since FK exists
+    role_name = serializers.CharField(source="role.name", read_only=True)
+
+    # ==========================
+    # TEAM
+    # ==========================
+    team_id = serializers.IntegerField(source="team_id", read_only=True)
+    team_name = serializers.CharField(source="team.name", read_only=True)
+
+    permissions = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "username",
+            "email",
+            "first_name",
+            "last_name",
+            "full_name",
+            "rank",
+            "phone",
+            "bio",
+            "profile_picture",
+
+            # role
+            "role_id",   # ✅ FIX APPLIED
+            "role_name", # (safe FK access)
+
+            # team
+            "team_id",
+            "team_name",
+
+            "is_available",
+            "is_active",
+            "is_staff",
+            "is_superuser",
+
+            "last_login",
+            "date_joined",
+            "created_at",
+            "updated_at",
+
+            "permissions",
+        ]
+
+    def get_full_name(self, obj):
+        return obj.get_full_name() or obj.username
+
+    def get_permissions(self, obj):
+        # superuser override
+        if obj.is_superuser:
+            return ["*"]
+
+        # FIX: safe null check
+        if not obj.role:
+            return []
+
+        return list(
+            obj.role.permissions.values_list(
+                "codename",
+                flat=True
+            )
+        )

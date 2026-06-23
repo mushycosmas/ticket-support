@@ -1,3 +1,4 @@
+# apps/tickets/models/ticket.py
 from django.db import models
 from django.utils import timezone
 
@@ -9,9 +10,18 @@ STREET_MODEL = "locations.Street"
 CUSTOMER_MODEL = "Customer"
 
 
+# ======================
+# SOFT DELETE MANAGER
+# ======================
+class SoftDeleteManager(models.Manager):
+    """Manager that excludes soft-deleted records by default."""
+    def get_queryset(self):
+        return super().get_queryset().filter(deleted_at__isnull=True)
+
+
 class Ticket(TimeStampedModel):
     """
-    Ticket model (ITSM-ready structure)
+    Ticket model (ITSM-ready structure) with soft delete support.
 
     Supports:
     - Customer tickets
@@ -20,6 +30,7 @@ class Ticket(TimeStampedModel):
     - Issue templates
     - Categories
     - Channel-based routing
+    - Soft delete (hide instead of delete)
     """
 
     # ======================
@@ -75,7 +86,7 @@ class Ticket(TimeStampedModel):
     )
 
     # ======================
-    # ISSUE TEMPLATE (NEW)
+    # ISSUE TEMPLATE
     # ======================
     template = models.ForeignKey(
         "tickets.IssueTemplate",
@@ -86,7 +97,7 @@ class Ticket(TimeStampedModel):
     )
 
     # ======================
-    # CATEGORY (NEW)
+    # CATEGORY
     # ======================
     category = models.ForeignKey(
         "categories.Category",
@@ -97,7 +108,7 @@ class Ticket(TimeStampedModel):
     )
 
     # ======================
-    # CHANNEL (NOW MODEL-BASED)
+    # CHANNEL
     # ======================
     channel = models.ForeignKey(
         "channels.Channel",
@@ -132,6 +143,34 @@ class Ticket(TimeStampedModel):
     updated_at = models.DateTimeField(auto_now=True)
 
     # ======================
+    # SOFT DELETE FIELD
+    # ======================
+    deleted_at = models.DateTimeField(null=True, blank=True)
+
+    # ======================
+    # MANAGERS
+    # ======================
+    objects = SoftDeleteManager()          # Excludes soft-deleted by default
+    all_objects = models.Manager()         # Includes all records (for admin/reports)
+
+    # ======================
+    # SOFT DELETE METHODS
+    # ======================
+    def soft_delete(self):
+        """Mark as deleted without removing from database."""
+        self.deleted_at = timezone.now()
+        self.save(update_fields=['deleted_at'])
+
+    def restore(self):
+        """Restore a soft-deleted ticket."""
+        self.deleted_at = None
+        self.save(update_fields=['deleted_at'])
+
+    @property
+    def is_deleted(self):
+        return self.deleted_at is not None
+
+    # ======================
     # SAVE OVERRIDE
     # ======================
     def save(self, *args, **kwargs):
@@ -139,7 +178,6 @@ class Ticket(TimeStampedModel):
         Auto-generate ticket number
         Update customer statistics
         """
-
         if not self.ticket_number:
             self.ticket_number = self._generate_ticket_number()
 
@@ -188,3 +226,4 @@ class Ticket(TimeStampedModel):
     # ======================
     def __str__(self):
         return f"{self.ticket_number or self.id} - {self.title}"
+    

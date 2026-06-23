@@ -134,8 +134,8 @@ class TicketService:
                 "street_id": street_id,
                 "assigned_to": assigned_to_id,
                 "assigned_by": assigned_by_id,
-                "team_id": team_id, 
-                "template_id": template_id, 
+                "team_id": team_id,
+                "template_id": template_id,
             }
         )
 
@@ -219,6 +219,9 @@ class TicketService:
         if not assign_type or not obj_id:
             raise ValidationError("type and id are required")
 
+        old_team = ticket.team
+        old_assignee = ticket.assigned_to
+
         # ======================
         # TEAM ASSIGNMENT
         # ======================
@@ -228,16 +231,25 @@ class TicketService:
             except Team.DoesNotExist:
                 raise ValidationError("Team not found")
 
+            # update ticket
             ticket.team = team
             ticket.assigned_to = None
             ticket.save(update_fields=["team", "assigned_to"])
 
+            # history (FULL TRACE)
             TicketHistory.objects.create(
                 ticket=ticket,
                 action="ASSIGNED",
                 comment=f"Assigned to team {team.name}",
+                old_team=old_team,
+                new_team=team,
+                old_assignee=old_assignee,
+                new_assignee=None,
                 created_by=request.user if request.user.is_authenticated else None,
-                metadata={"type": "team", "team_id": team.id}
+                metadata={
+                    "type": "team",
+                    "team_id": team.id
+                }
             )
 
             return ticket
@@ -251,7 +263,7 @@ class TicketService:
             except User.DoesNotExist:
                 raise ValidationError("User not found")
 
-            # Verify agent role
+            # verify role
             role_name = None
             if hasattr(agent, "role") and agent.role:
                 role_name = agent.role.name.upper() if hasattr(agent.role, "name") else str(agent.role).upper()
@@ -261,19 +273,26 @@ class TicketService:
             if role_name != "AGENT":
                 raise ValidationError("Only agents can be assigned")
 
-            old_assignee = ticket.assigned_to
-            ticket = TicketWorkflow.assign(ticket, agent)
+            # update ticket
+            ticket.assigned_to = agent
             ticket.team = None
             ticket.assigned_by = request.user if request.user.is_authenticated else None
             ticket.save()
 
+            # history (FULL TRACE)
             TicketHistory.objects.create(
                 ticket=ticket,
                 action="ASSIGNED",
-                old_assignee=str(old_assignee) if old_assignee else None,
-                new_assignee=str(agent),
+                comment=f"Assigned to agent {agent}",
+                old_team=old_team,
+                new_team=None,
+                old_assignee=old_assignee,
+                new_assignee=agent,
                 created_by=request.user if request.user.is_authenticated else None,
-                metadata={"type": "agent", "agent_id": agent.id}
+                metadata={
+                    "type": "agent",
+                    "agent_id": agent.id
+                }
             )
 
             return ticket

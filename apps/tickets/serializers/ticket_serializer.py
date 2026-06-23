@@ -240,6 +240,7 @@ class TicketSerializer(serializers.ModelSerializer):
             # relations
             "attachments",
             "history",
+            "deleted_at"
         ]
         extra_kwargs = {
             "customer": {"required": False, "allow_null": True},
