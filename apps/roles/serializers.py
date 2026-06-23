@@ -1,13 +1,63 @@
 # apps/roles/serializers.py - CORRECT VERSION
 from rest_framework import serializers
 from django.contrib.auth.models import Permission
-from .models import Role  # ← Import Role from models, don't define it here
+from django.contrib.contenttypes.models import ContentType
+from .models import Role
 
 
 class PermissionSerializer(serializers.ModelSerializer):
+    # Make content_type_id required only for create, optional for update
+    content_type_id = serializers.IntegerField(required=False, allow_null=True)
+    
     class Meta:
         model = Permission
-        fields = ['id', 'name', 'codename']
+        fields = ['id', 'name', 'codename', 'content_type_id']
+        extra_kwargs = {
+            'content_type_id': {'required': False}
+        }
+
+    def create(self, validated_data):
+        # content_type_id is required for create
+        content_type_id = validated_data.pop('content_type_id', None)
+        
+        if content_type_id is None:
+            raise serializers.ValidationError({
+                'content_type_id': 'This field is required for creating permissions.'
+            })
+        
+        try:
+            content_type = ContentType.objects.get(id=content_type_id)
+        except ContentType.DoesNotExist:
+            raise serializers.ValidationError({
+                'content_type_id': f'ContentType with id {content_type_id} does not exist'
+            })
+        
+        # Create permission with the content_type
+        permission = Permission.objects.create(
+            name=validated_data['name'],
+            codename=validated_data['codename'],
+            content_type=content_type
+        )
+        return permission
+
+    def update(self, instance, validated_data):
+        # content_type_id is optional for update
+        content_type_id = validated_data.pop('content_type_id', None)
+        
+        if content_type_id is not None:
+            try:
+                content_type = ContentType.objects.get(id=content_type_id)
+                instance.content_type = content_type
+            except ContentType.DoesNotExist:
+                raise serializers.ValidationError({
+                    'content_type_id': f'ContentType with id {content_type_id} does not exist'
+                })
+        
+        # Update other fields
+        instance.name = validated_data.get('name', instance.name)
+        instance.codename = validated_data.get('codename', instance.codename)
+        instance.save()
+        return instance
 
 
 class RoleSerializer(serializers.ModelSerializer):
@@ -23,7 +73,7 @@ class RoleSerializer(serializers.ModelSerializer):
     )
 
     class Meta:
-        model = Role  # ← This should reference the model, not define it
+        model = Role
         fields = [
             'id', 'name', 'description', 'is_active', 
             'permissions', 'permission_details',
