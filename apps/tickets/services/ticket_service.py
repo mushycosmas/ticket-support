@@ -2,12 +2,17 @@ import uuid
 from django.utils import timezone
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import ValidationError, PermissionDenied
 
 from ..models import Ticket, Customer, TicketHistory
 from apps.users.models import Team
 
 User = get_user_model()
+
+# =========================
+# CONSTANTS
+# =========================
+ALLOWED_ASSIGNEE_ROLES = ["AGENT", "SUPPORT", "ADMIN", "TEAM_LEAD"]
 
 
 # =========================
@@ -74,6 +79,33 @@ class TicketService:
             return int(value)
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _get_user_role(user):
+        """Extract user role from various possible field structures."""
+        if not user:
+            return None
+        
+        if hasattr(user, "role") and user.role:
+            if hasattr(user.role, "name"):
+                return user.role.name.upper()
+            return str(user.role).upper()
+        elif hasattr(user, "role_name") and user.role_name:
+            return user.role_name.upper()
+        
+        return None
+
+    @staticmethod
+    def _is_admin(user):
+        """Check if user has admin role."""
+        role = TicketService._get_user_role(user)
+        return role == "ADMIN"
+
+    @staticmethod
+    def _is_team_lead(user):
+        """Check if user has team lead role."""
+        role = TicketService._get_user_role(user)
+        return role == "TEAM_LEAD"
 
     # ---------- CREATE ----------
     @staticmethod
@@ -210,7 +242,7 @@ class TicketService:
         )
         return ticket
 
-    # ---------- ASSIGN (supports both agent and team) ----------
+    # ---------- ASSIGN (supports both agent and team - keeps both) ----------
     @staticmethod
     def assign(ticket, request):
         assign_type = request.data.get("type")
@@ -221,6 +253,9 @@ class TicketService:
 
         old_team = ticket.team
         old_assignee = ticket.assigned_to
+        requesting_user = request.user if request.user.is_authenticated else None
+        is_admin = TicketService._is_admin(requesting_user)
+        is_team_lead = TicketService._is_team_lead(requesting_user)
 
         # ======================
         # TEAM ASSIGNMENT
@@ -231,31 +266,41 @@ class TicketService:
             except Team.DoesNotExist:
                 raise ValidationError("Team not found")
 
-            # update ticket
-            ticket.team = team
-            ticket.assigned_to = None
-            ticket.save(update_fields=["team", "assigned_to"])
+            # Check permissions for non-admins
+            if not is_admin and not is_team_lead:
+                raise PermissionDenied("Only admins and team leads can assign to teams")
 
-            # history (FULL TRACE)
+            # ✅ KEEP existing agent assignment - DO NOT clear assigned_to
+            ticket.team = team
+            # DO NOT: ticket.assigned_to = None  ← Keep the agent!
+            ticket.assigned_by = requesting_user
+            ticket.status = "ASSIGNED"
+            ticket.save()
+
+            # History (FULL TRACE)
+            assigned_to_info = f" (with assignee {old_assignee})" if old_assignee else ""
             TicketHistory.objects.create(
                 ticket=ticket,
                 action="ASSIGNED",
-                comment=f"Assigned to team {team.name}",
+                comment=f"Assigned to team {team.name}{assigned_to_info}",
                 old_team=old_team,
                 new_team=team,
                 old_assignee=old_assignee,
-                new_assignee=None,
-                created_by=request.user if request.user.is_authenticated else None,
+                new_assignee=old_assignee,  # Keep the same assignee
+                created_by=requesting_user,
                 metadata={
                     "type": "team",
-                    "team_id": team.id
+                    "team_id": team.id,
+                    "assigned_by_admin": is_admin,
+                    "assigned_by_team_lead": is_team_lead,
+                    "assignee_kept": old_assignee.id if old_assignee else None
                 }
             )
 
             return ticket
 
         # ======================
-        # AGENT ASSIGNMENT
+        # AGENT/SUPPORT ASSIGNMENT
         # ======================
         if assign_type == "agent":
             try:
@@ -263,35 +308,54 @@ class TicketService:
             except User.DoesNotExist:
                 raise ValidationError("User not found")
 
-            # verify role
-            role_name = None
-            if hasattr(agent, "role") and agent.role:
-                role_name = agent.role.name.upper() if hasattr(agent.role, "name") else str(agent.role).upper()
-            elif hasattr(agent, "role_name") and agent.role_name:
-                role_name = agent.role_name.upper()
+            # Get agent's role
+            role_name = TicketService._get_user_role(agent)
 
-            if role_name != "AGENT":
-                raise ValidationError("Only agents can be assigned")
+            # Allow admin to assign to anyone, but restrict others to allowed roles
+            if not is_admin and role_name not in ALLOWED_ASSIGNEE_ROLES:
+                allowed_roles_display = ", ".join(role.lower() for role in ALLOWED_ASSIGNEE_ROLES)
+                raise ValidationError(f"Only {allowed_roles_display} can be assigned")
 
-            # update ticket
+            # Additional validation for non-admins
+            if not is_admin:
+                # Check if agent is active
+                if not agent.is_active:
+                    raise ValidationError("Cannot assign to inactive user")
+                
+                # Team leads can only assign agents from their team
+                if is_team_lead:
+                    if agent.team_id != requesting_user.team_id:
+                        raise ValidationError("You can only assign agents from your team")
+
+            # ✅ KEEP existing team assignment - DO NOT clear team
             ticket.assigned_to = agent
-            ticket.team = None
-            ticket.assigned_by = request.user if request.user.is_authenticated else None
+            # DO NOT: ticket.team = None  ← Keep the team!
+            ticket.assigned_by = requesting_user
+            ticket.status = "ASSIGNED"
             ticket.save()
 
-            # history (FULL TRACE)
+            # History (FULL TRACE)
+            team_info = f" (with team {old_team})" if old_team else ""
+            comment = f"Assigned to {role_name.lower()} {agent.get_full_name() or agent.username}{team_info}"
+            if is_admin:
+                comment += " (admin override)"
+            
             TicketHistory.objects.create(
                 ticket=ticket,
                 action="ASSIGNED",
-                comment=f"Assigned to agent {agent}",
+                comment=comment,
                 old_team=old_team,
-                new_team=None,
+                new_team=old_team,  # Keep the same team
                 old_assignee=old_assignee,
                 new_assignee=agent,
-                created_by=request.user if request.user.is_authenticated else None,
+                created_by=requesting_user,
                 metadata={
                     "type": "agent",
-                    "agent_id": agent.id
+                    "agent_id": agent.id,
+                    "role": role_name,
+                    "assigned_by_admin": is_admin,
+                    "assigned_by_team_lead": is_team_lead,
+                    "team_kept": old_team.id if old_team else None
                 }
             )
 

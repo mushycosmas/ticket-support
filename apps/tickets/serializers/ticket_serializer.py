@@ -1,6 +1,8 @@
 from rest_framework import serializers
 from apps.tickets.models import Ticket, TicketAttachment, Customer, TicketHistory, IssueTemplate
 from apps.locations.models import Street
+from apps.channels.models import Channel
+from apps.categories.models import Category
 from .customer_serializer import CustomerSerializer
 from .attachment_serializer import TicketAttachmentSerializer
 from .history_serializer import TicketHistorySerializer
@@ -24,6 +26,46 @@ class TicketSerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True
     )
+
+    # =====================
+    # CHANNEL (FIXED)
+    # =====================
+    # ✅ Write-only field for creating/updating
+    channel_id = serializers.PrimaryKeyRelatedField(
+        queryset=Channel.objects.all(),
+        source="channel",
+        write_only=True,
+        required=False,
+        allow_null=True
+    )
+    
+    # ✅ Read-only fields - these will be returned in the response
+    channel_name = serializers.SerializerMethodField()
+    channel_status = serializers.SerializerMethodField()
+    channel_created_at = serializers.SerializerMethodField()
+    
+    # ✅ The channel field itself - make it read-only to return the full object
+    channel = serializers.PrimaryKeyRelatedField(read_only=True)
+
+    # =====================
+    # CATEGORY (FIXED)
+    # =====================
+    # ✅ Write-only field for creating/updating
+    category_id = serializers.PrimaryKeyRelatedField(
+        queryset=Category.objects.all(),
+        source="category",
+        write_only=True,
+        required=False,
+        allow_null=True
+    )
+    
+    # ✅ Read-only fields - these will be returned in the response
+    category_name = serializers.SerializerMethodField()
+    category_description = serializers.SerializerMethodField()
+    category_status = serializers.SerializerMethodField()
+    
+    # ✅ The category field itself - make it read-only to return the full object
+    category = serializers.PrimaryKeyRelatedField(read_only=True)
 
     # =====================
     # TEMPLATE
@@ -60,6 +102,7 @@ class TicketSerializer(serializers.ModelSerializer):
     # =====================
     team_name = serializers.CharField(source="team.name", read_only=True)
     assigned_to_name = serializers.SerializerMethodField()
+    assigned_by_name = serializers.SerializerMethodField()
 
     # =====================
     # RELATIONS
@@ -127,6 +170,9 @@ class TicketSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         request = self.context.get("request")
         old_status = instance.status
+        old_priority = instance.priority
+        old_category = instance.category
+        old_channel = instance.channel
 
         # Update customer if email is provided
         email = validated_data.pop("customer_email", None)
@@ -145,11 +191,13 @@ class TicketSerializer(serializers.ModelSerializer):
             )
             instance.customer = customer
 
+        # Update other fields
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
 
         instance.save()
 
+        # Track changes for history
         if old_status != instance.status:
             TicketHistory.objects.create(
                 ticket=instance,
@@ -160,6 +208,50 @@ class TicketSerializer(serializers.ModelSerializer):
                 created_by=request.user if request and request.user.is_authenticated else None
             )
 
+        if old_priority != instance.priority:
+            TicketHistory.objects.create(
+                ticket=instance,
+                action="PRIORITY_CHANGED",
+                comment=f"Priority changed from {old_priority} to {instance.priority}",
+                created_by=request.user if request and request.user.is_authenticated else None,
+                metadata={
+                    "old_priority": old_priority,
+                    "new_priority": instance.priority
+                }
+            )
+
+        if old_category != instance.category:
+            old_category_name = old_category.name if old_category else "None"
+            new_category_name = instance.category.name if instance.category else "None"
+            TicketHistory.objects.create(
+                ticket=instance,
+                action="CATEGORY_CHANGED",
+                comment=f"Category changed from {old_category_name} to {new_category_name}",
+                created_by=request.user if request and request.user.is_authenticated else None,
+                metadata={
+                    "old_category_id": old_category.id if old_category else None,
+                    "old_category_name": old_category_name,
+                    "new_category_id": instance.category.id if instance.category else None,
+                    "new_category_name": new_category_name
+                }
+            )
+
+        if old_channel != instance.channel:
+            old_channel_name = old_channel.name if old_channel else "None"
+            new_channel_name = instance.channel.name if instance.channel else "None"
+            TicketHistory.objects.create(
+                ticket=instance,
+                action="CHANNEL_CHANGED",
+                comment=f"Channel changed from {old_channel_name} to {new_channel_name}",
+                created_by=request.user if request and request.user.is_authenticated else None,
+                metadata={
+                    "old_channel_id": old_channel.id if old_channel else None,
+                    "old_channel_name": old_channel_name,
+                    "new_channel_id": instance.channel.id if instance.channel else None,
+                    "new_channel_name": new_channel_name
+                }
+            )
+
         return instance
 
     # =====================
@@ -168,6 +260,41 @@ class TicketSerializer(serializers.ModelSerializer):
     def get_assigned_to_name(self, obj):
         if obj.assigned_to:
             return obj.assigned_to.get_full_name() or obj.assigned_to.username
+        return None
+
+    def get_assigned_by_name(self, obj):
+        if obj.assigned_by:
+            return obj.assigned_by.get_full_name() or obj.assigned_by.username
+        return None
+
+    def get_channel_name(self, obj):
+        if obj.channel:
+            return obj.channel.name
+        return None
+
+    def get_channel_status(self, obj):
+        if obj.channel:
+            return getattr(obj.channel, 'status', None)
+        return None
+
+    def get_channel_created_at(self, obj):
+        if obj.channel:
+            return getattr(obj.channel, 'created_at', None)
+        return None
+
+    def get_category_name(self, obj):
+        if obj.category:
+            return obj.category.name
+        return None
+
+    def get_category_description(self, obj):
+        if obj.category:
+            return getattr(obj.category, 'description', None)
+        return None
+
+    def get_category_status(self, obj):
+        if obj.category:
+            return getattr(obj.category, 'status', None)
         return None
 
     def get_location_full(self, obj):
@@ -202,7 +329,6 @@ class TicketSerializer(serializers.ModelSerializer):
             "priority",
             "created_at",
             "updated_at",
-            "channel",
             "resolved_at",
 
             # customer
@@ -213,6 +339,20 @@ class TicketSerializer(serializers.ModelSerializer):
             "customer_phone",
             "customer_nida",
             "customer_gender",
+
+            # channel
+            "channel",
+            "channel_id",
+            "channel_name",
+            "channel_status",
+            "channel_created_at",
+
+            # category
+            "category",
+            "category_id",
+            "category_name",
+            "category_description",
+            "category_status",
 
             # template
             "template",
@@ -226,6 +366,7 @@ class TicketSerializer(serializers.ModelSerializer):
             "assigned_to",
             "assigned_to_name",
             "assigned_by",
+            "assigned_by_name",
 
             # location
             "street",
@@ -244,4 +385,6 @@ class TicketSerializer(serializers.ModelSerializer):
         ]
         extra_kwargs = {
             "customer": {"required": False, "allow_null": True},
+            "channel": {"required": False, "allow_null": True},
+            "category": {"required": False, "allow_null": True},
         }

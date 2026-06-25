@@ -65,9 +65,6 @@ class TicketWorkflow:
 class TicketService:
     """Handles all ticket operations and delegates state changes to workflow."""
 
-    # Allowed roles for assignment
-    ALLOWED_ASSIGNEE_ROLES = ["AGENT", "SUPPORT"]
-
     @staticmethod
     def safe_int(value):
         """Convert to int safely, return None for invalid input."""
@@ -258,7 +255,7 @@ class TicketService:
             return ticket
 
         # ======================
-        # AGENT/SUPPORT ASSIGNMENT
+        # AGENT ASSIGNMENT
         # ======================
         if assign_type == "agent":
             try:
@@ -266,19 +263,15 @@ class TicketService:
             except User.DoesNotExist:
                 raise ValidationError("User not found")
 
-            # verify role - Accepts AGENT or SUPPORT
+            # verify role
             role_name = None
             if hasattr(agent, "role") and agent.role:
                 role_name = agent.role.name.upper() if hasattr(agent.role, "name") else str(agent.role).upper()
             elif hasattr(agent, "role_name") and agent.role_name:
                 role_name = agent.role_name.upper()
 
-            # Allow both AGENT and SUPPORT roles
-            if role_name not in TicketService.ALLOWED_ASSIGNEE_ROLES:
-                raise ValidationError(
-                    f"Only {', '.join(TicketService.ALLOWED_ASSIGNEE_ROLES)} can be assigned. "
-                    f"User '{agent}' has role '{role_name}'"
-                )
+            if role_name != "AGENT":
+                raise ValidationError("Only agents can be assigned")
 
             # update ticket
             ticket.assigned_to = agent
@@ -290,7 +283,7 @@ class TicketService:
             TicketHistory.objects.create(
                 ticket=ticket,
                 action="ASSIGNED",
-                comment=f"Assigned to {role_name.lower()} {agent.get_full_name() or agent.username}",
+                comment=f"Assigned to agent {agent}",
                 old_team=old_team,
                 new_team=None,
                 old_assignee=old_assignee,
@@ -298,9 +291,7 @@ class TicketService:
                 created_by=request.user if request.user.is_authenticated else None,
                 metadata={
                     "type": "agent",
-                    "agent_id": agent.id,
-                    "role": role_name,
-                    "agent_name": agent.get_full_name() or agent.username
+                    "agent_id": agent.id
                 }
             )
 

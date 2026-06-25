@@ -2,8 +2,13 @@ from rest_framework import viewsets, status
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
+from django.utils import timezone
 
-from ..models import Ticket
+from ..models import Ticket, TicketHistory
+# ✅ Fix: Import Category from the categories app
+from apps.categories.models import Category
+
 from ..serializers import TicketSerializer
 from ..services.ticket_service import TicketService
 from ..queries.ticket_query import TicketQuery
@@ -30,18 +35,30 @@ class TicketViewSet(
     TicketAgingMixin,
     viewsets.ModelViewSet,
 ):
+    """
+    Ticket ViewSet with full CRUD operations and custom actions.
+    Supports: Create, Read, Update, Delete (soft), Assign, Resolve, Close, Reopen, Comment, 
+    Update Priority, Update Category, Update Status, and more.
+    """
     serializer_class = TicketSerializer
     permission_classes = [IsAuthenticated]
 
     def get_permissions(self):
+        """Allow unauthenticated access for create and track actions."""
         if self.action in ["create", "track"]:
             return [AllowAny()]
         return [IsAuthenticated()]
 
     def get_queryset(self):
+        """Get queryset with role-based filtering."""
         return TicketQuery(self.request).get_queryset()
 
+    # ==========================================
+    # STANDARD CRUD OPERATIONS
+    # ==========================================
+
     def list(self, request, *args, **kwargs):
+        """List tickets with pagination and filters."""
         queryset = self.get_queryset()
         queryset = TicketQuery(request).apply_filters(queryset)
 
@@ -59,18 +76,28 @@ class TicketViewSet(
         })
 
     def create(self, request, *args, **kwargs):
+        """Create a new ticket."""
         ticket = TicketService.create_ticket(request)
         serializer = self.get_serializer(ticket)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def retrieve(self, request, *args, **kwargs):
+        """Retrieve a single ticket with timeline and last update."""
         ticket = self.get_object()
         data = self.get_serializer(ticket).data
         data["timeline"] = TicketTimelineBuilder.build(ticket)
         data["lastUpdate"] = ticket.updated_at.isoformat()
         return Response(data)
 
-    # ---------- SOFT DELETE OVERRIDE ----------
+    def update(self, request, *args, **kwargs):
+        """Update a ticket fully."""
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        return Response(serializer.data)
+
     def destroy(self, request, *args, **kwargs):
         """Soft delete a ticket."""
         ticket = self.get_object()
@@ -79,6 +106,10 @@ class TicketViewSet(
             {"message": "Ticket soft-deleted successfully", "id": ticket.id},
             status=status.HTTP_200_OK
         )
+
+    # ==========================================
+    # SOFT DELETE MANAGEMENT
+    # ==========================================
 
     @action(detail=True, methods=['post'])
     def restore(self, request, pk=None):
@@ -100,11 +131,7 @@ class TicketViewSet(
     def deleted(self, request):
         """List all soft-deleted tickets (admin only)."""
         # Get user role name safely
-        role_name = None
-        if hasattr(request.user, 'role') and request.user.role:
-            role_name = request.user.role.name.upper() if hasattr(request.user.role, 'name') else str(request.user.role).upper()
-        elif hasattr(request.user, 'role_name') and request.user.role_name:
-            role_name = request.user.role_name.upper()
+        role_name = self._get_user_role(request.user)
 
         # Allow access if role is ADMIN or user is staff (backup)
         if role_name != "ADMIN" and not request.user.is_staff:
@@ -120,3 +147,175 @@ class TicketViewSet(
             return self.get_paginated_response(serializer.data)
         serializer = self.get_serializer(deleted_tickets, many=True)
         return Response(serializer.data)
+
+    # ==========================================
+    # TICKET UPDATE ACTIONS
+    # ==========================================
+
+    @action(detail=True, methods=['patch'])
+    def update_category(self, request, pk=None):
+        """
+        Update ticket category.
+        Expected payload: { "category_id": 123 }
+        """
+        ticket = self.get_object()
+        category_id = request.data.get('category_id')
+        
+        # Validate category_id
+        if category_id is None:
+            raise ValidationError({"category_id": "This field is required."})
+        
+        # Get the category from the categories app
+        try:
+            category = Category.objects.get(id=category_id)
+        except Category.DoesNotExist:
+            raise ValidationError({"category_id": f"Category with id {category_id} does not exist."})
+        
+        # Store old category for history
+        old_category = ticket.category
+        old_category_name = old_category.name if old_category else "None"
+        
+        # Update the ticket
+        ticket.category = category
+        ticket.save(update_fields=['category', 'updated_at'])
+        
+        # Create history entry
+        TicketHistory.objects.create(
+            ticket=ticket,
+            action="CATEGORY_UPDATED",
+            comment=f"Category updated from '{old_category_name}' to '{category.name}'",
+            created_by=request.user,
+            metadata={
+                "old_category_id": old_category.id if old_category else None,
+                "old_category_name": old_category_name,
+                "new_category_id": category.id,
+                "new_category_name": category.name
+            }
+        )
+        
+        return Response({
+            "message": "Category updated successfully",
+            "category_id": category.id,
+            "category_name": category.name,
+            "old_category": old_category_name
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['patch'])
+    def update_priority(self, request, pk=None):
+        """
+        Update ticket priority.
+        Expected payload: { "priority": "HIGH" }
+        Valid priorities: LOW, MEDIUM, HIGH, CRITICAL
+        """
+        ticket = self.get_object()
+        priority = request.data.get('priority')
+        
+        if not priority:
+            raise ValidationError({"priority": "This field is required."})
+        
+        # Validate priority
+        valid_priorities = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']
+        if priority.upper() not in valid_priorities:
+            raise ValidationError({
+                "priority": f"Priority must be one of: {', '.join(valid_priorities)}"
+            })
+        
+        old_priority = ticket.priority
+        
+        # Update the ticket
+        ticket.priority = priority.upper()
+        ticket.save(update_fields=['priority', 'updated_at'])
+        
+        # Create history entry
+        TicketHistory.objects.create(
+            ticket=ticket,
+            action="PRIORITY_UPDATED",
+            comment=f"Priority updated from '{old_priority}' to '{ticket.priority}'",
+            created_by=request.user,
+            metadata={
+                "old_priority": old_priority,
+                "new_priority": ticket.priority
+            }
+        )
+        
+        return Response({
+            "message": "Priority updated successfully",
+            "priority": ticket.priority,
+            "old_priority": old_priority
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['patch'])
+    def update_status(self, request, pk=None):
+        """
+        Update ticket status.
+        Expected payload: { "status": "IN_PROGRESS" }
+        Valid statuses: OPEN, ASSIGNED, IN_PROGRESS, RESOLVED, CLOSED
+        """
+        ticket = self.get_object()
+        status_value = request.data.get('status')
+        
+        if not status_value:
+            raise ValidationError({"status": "This field is required."})
+        
+        # Validate status
+        valid_statuses = ['OPEN', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED', 'CLOSED']
+        if status_value.upper() not in valid_statuses:
+            raise ValidationError({
+                "status": f"Status must be one of: {', '.join(valid_statuses)}"
+            })
+        
+        old_status = ticket.status
+        
+        # Update the ticket
+        ticket.status = status_value.upper()
+        
+        # If resolved, set resolved_at
+        if ticket.status == 'RESOLVED' and not ticket.resolved_at:
+            ticket.resolved_at = timezone.now()
+        elif ticket.status != 'RESOLVED':
+            ticket.resolved_at = None
+            
+        ticket.save(update_fields=['status', 'resolved_at', 'updated_at'])
+        
+        # Create history entry
+        TicketHistory.objects.create(
+            ticket=ticket,
+            action="STATUS_UPDATED",
+            comment=f"Status updated from '{old_status}' to '{ticket.status}'",
+            created_by=request.user,
+            metadata={
+                "old_status": old_status,
+                "new_status": ticket.status
+            }
+        )
+        
+        return Response({
+            "message": "Status updated successfully",
+            "status": ticket.status,
+            "old_status": old_status
+        }, status=status.HTTP_200_OK)
+
+    # ==========================================
+    # HELPER METHODS
+    # ==========================================
+
+    def _get_user_role(self, user):
+        """
+        Extract user role from various possible field structures.
+        Handles both string and object role fields.
+        """
+        if not user:
+            return None
+        
+        # Check role attribute (ForeignKey or CharField)
+        if hasattr(user, "role") and user.role:
+            if hasattr(user.role, "name"):
+                return user.role.name.upper()
+            elif isinstance(user.role, str):
+                return user.role.upper()
+        
+        # Check role_name attribute
+        if hasattr(user, "role_name") and user.role_name:
+            return user.role_name.upper()
+        
+        return None

@@ -33,38 +33,73 @@ class UserQuerySetMixin:
         # ✅ FIX: Select related role and team for better performance
         queryset = User.objects.select_related("team", "role").all()
         
-        # Apply search filter
+        # ✅ Get user role name safely
+        user_role_name = None
+        if user.role:
+            if hasattr(user.role, 'name'):
+                user_role_name = user.role.name.upper()
+            elif isinstance(user.role, str):
+                user_role_name = user.role.upper()
+        elif hasattr(user, 'role_name') and user.role_name:
+            user_role_name = user.role_name.upper()
+        
+        # ✅ Apply search filter
         search = self.request.query_params.get('search')
         if search:
             queryset = queryset.filter(
                 Q(username__icontains=search) |
                 Q(email__icontains=search) |
                 Q(first_name__icontains=search) |
-                Q(last_name__icontains=search)
+                Q(last_name__icontains=search) |
+                Q(full_name__icontains=search)  # ✅ Add full_name search
             )
         
-        # Apply role filter (filter by role name)
+        # ✅ Apply role filter (filter by role name)
         role_name = self.request.query_params.get('role')
         if role_name:
-            queryset = queryset.filter(role__name=role_name)
+            queryset = queryset.filter(role__name__iexact=role_name)
         
-        # ✅ FIX: Compare role.name, not role object
-        # Check if user has admin role
-        if user.role and user.role.name == "ADMIN":
-            # Admin can see all users
+        # ✅ Apply team filter
+        team_id = self.request.query_params.get('team')
+        if team_id:
+            try:
+                queryset = queryset.filter(team_id=int(team_id))
+            except (TypeError, ValueError):
+                pass
+        
+        # =========================
+        # ADMIN - Can see all users
+        # =========================
+        if user_role_name == "ADMIN":
             return queryset
         
-        # Check if user is team lead
-        elif user.role and user.role.name == "TEAM_LEAD":
-            # Team Lead can see agents in their team
-            return queryset.filter(team=user.team, role__name="AGENT")
+        # =========================
+        # TEAM_LEAD - Can see AGENT and SUPPORT in their team
+        # =========================
+        elif user_role_name == "TEAM_LEAD":
+            if user.team_id:
+                # ✅ FIX: Include both AGENT and SUPPORT roles
+                return queryset.filter(
+                    team_id=user.team_id,
+                    role__name__in=["AGENT", "SUPPORT"]
+                )
+            return User.objects.none()
         
-        # Check if user is agent
-        elif user.role and user.role.name == "AGENT":
-            # Agent can only see themselves
+        # =========================
+        # AGENT - Can only see themselves
+        # =========================
+        elif user_role_name == "AGENT":
             return queryset.filter(id=user.id)
         
-        # No valid role
+        # =========================
+        # SUPPORT - Can only see themselves
+        # =========================
+        elif user_role_name == "SUPPORT":
+            return queryset.filter(id=user.id)
+        
+        # =========================
+        # DEFAULT - No access
+        # =========================
         return User.objects.none()
 
 
