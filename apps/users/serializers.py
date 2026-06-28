@@ -277,6 +277,7 @@ class UserSerializer(serializers.ModelSerializer):
             "date_joined",
             "team_name",
             "permissions",
+            "is_default_password"
         ]
 
     def get_full_name(self, obj):
