@@ -9,6 +9,7 @@ from .customer import Customer
 from .attachment import TicketAttachment
 from .history import TicketHistory
 from .issue_template import IssueTemplate
+from apps.channels.models import Channel 
 
 __all__ = [
     "Ticket",
@@ -16,4 +17,5 @@ __all__ = [
     "TicketAttachment",
     "TicketHistory",
     "IssueTemplate",
+    'Channel',
 ]

@@ -84,7 +84,6 @@ class TicketService:
     - Channel determines the team
     - Team lead is auto-assigned
     - AGENTS and SUPPORT are manually assigned
-    - When assigned to ANY member, status becomes IN_PROGRESS
     """
 
     @staticmethod
@@ -285,26 +284,13 @@ class TicketService:
             except Team.DoesNotExist:
                 pass
 
-        # ✅ Determine initial status
-        # If assigned to ANY member (Team Lead, Agent, Support), set to IN_PROGRESS
-        initial_status = "OPEN"
-        
-        # Check if assigned_to is provided
-        if assigned_to_id:
-            assigned_user = User.objects.filter(id=assigned_to_id).first()
-            if assigned_user and TicketService._is_assignable(assigned_user):
-                initial_status = "IN_PROGRESS"
-        elif team_lead:
-            # If auto-assigned to team lead
-            initial_status = "IN_PROGRESS"
-
         # ----- Create ticket -----
         ticket = Ticket.objects.create(
             ticket_number=f"TKT-{uuid.uuid4().hex[:8].upper()}",
             title=data.get("title"),
             description=data.get("description", ""),
             priority=data.get("priority", "MEDIUM"),
-            status=initial_status,  # ✅ Set correct initial status
+            status="OPEN",
             category_id=category_id,
             channel_id=channel_id,
             street_id=street_id,
@@ -319,9 +305,6 @@ class TicketService:
             user = User.objects.filter(id=assigned_to_id).first()
             if user:
                 ticket.assigned_to = user
-                # ✅ If assigned to any assignable user, set to IN_PROGRESS
-                if TicketService._is_assignable(user):
-                    ticket.status = "IN_PROGRESS"
         
         # ----- Set assigned_by -----
         if assigned_by_id:
@@ -337,7 +320,6 @@ class TicketService:
         TicketHistory.objects.create(
             ticket=ticket,
             action="CREATED",
-            comment=f"Ticket created with status: {ticket.status}",
             created_by=request.user if request.user.is_authenticated else None,
             metadata={
                 "title": ticket.title,
@@ -351,7 +333,6 @@ class TicketService:
                 "template_id": template_id,
                 "customer_id": customer.id if customer else None,
                 "customer_created": customer_created,
-                "initial_status": initial_status,
                 "auto_assigned_from_channel": bool(channel_id and final_team_id),
             }
         )
@@ -382,7 +363,6 @@ class TicketService:
     def assign_worker(ticket, request):
         """
         Assign an agent or support staff to the ticket manually.
-        When assigned to ANY member, status becomes IN_PROGRESS.
         """
         worker_id = request.data.get("id") or request.data.get("agent_id")
         
@@ -424,8 +404,11 @@ class TicketService:
         ticket.assigned_to = worker
         ticket.assigned_by = requesting_user
         
-        # ✅ ANY assigned member -> IN_PROGRESS
-        ticket.status = "IN_PROGRESS"
+        # If assigning to self (team lead), set to IN_PROGRESS
+        if worker.id == requesting_user.id and is_team_lead:
+            ticket.status = "IN_PROGRESS"
+        else:
+            ticket.status = "ASSIGNED"
         
         ticket.save()
 
@@ -436,10 +419,6 @@ class TicketService:
             comment += " (admin override)"
         elif is_team_lead and worker.id == requesting_user.id:
             comment += " (self-assigned by team lead)"
-        
-        # Add status change info
-        if old_status != ticket.status:
-            comment += f" (status changed from {old_status} to {ticket.status})"
         
         TicketHistory.objects.create(
             ticket=ticket,
@@ -459,7 +438,6 @@ class TicketService:
                 "assigned_by_team_lead": is_team_lead,
                 "team_id": ticket.team_id,
                 "self_assigned": worker.id == requesting_user.id,
-                "status_changed": old_status != ticket.status,
             }
         )
 
@@ -490,23 +468,18 @@ class TicketService:
 
         old_team = ticket.team
         old_assignee = ticket.assigned_to
-        old_status = ticket.status
 
         ticket.team = new_team
         ticket.assigned_by = requesting_user
         ticket.save()
 
-        # Get new team lead
         new_team_lead = TicketService._get_team_lead(new_team)
         
         if new_team_lead:
             ticket.assigned_to = new_team_lead
-            # ✅ Team lead assigned -> IN_PROGRESS
-            ticket.status = "IN_PROGRESS"
             ticket.save()
             new_assignee = new_team_lead
         else:
-            # No team lead, keep old assignee
             new_assignee = old_assignee
 
         TicketHistory.objects.create(
@@ -517,14 +490,11 @@ class TicketService:
             new_team=new_team,
             old_assignee=old_assignee,
             new_assignee=new_assignee,
-            old_status=old_status,
-            new_status=ticket.status,
             created_by=requesting_user,
             metadata={
                 "old_team_id": old_team.id if old_team else None,
                 "new_team_id": new_team.id,
                 "team_lead_auto_assigned": bool(new_team_lead),
-                "status_changed": old_status != ticket.status,
             }
         )
 
