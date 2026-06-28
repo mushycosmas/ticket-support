@@ -5,6 +5,6 @@ from .serializers import ChannelSerializer
 
 
 class ChannelViewSet(viewsets.ModelViewSet):
-    queryset = Channel.objects.all().order_by("-id")
+    queryset = Channel.objects.select_related("team").all().order_by("-id")
     serializer_class = ChannelSerializer
-    permission_classes = [AllowAny]  # 👈 makes it public
+    permission_classes = [AllowAny]

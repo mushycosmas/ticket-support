@@ -1,4 +1,3 @@
-# models.py
 from django.db import models
 
 class Channel(models.Model):
@@ -15,6 +14,13 @@ class Channel(models.Model):
         max_length=10,
         choices=STATUS_CHOICES,
         default=STATUS_PRIVATE
+    )
+
+  
+    team = models.ForeignKey(
+        "users.Team",
+        on_delete=models.CASCADE,
+        related_name="channels"
     )
 
     created_at = models.DateTimeField(auto_now_add=True)
