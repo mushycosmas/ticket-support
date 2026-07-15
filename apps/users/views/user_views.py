@@ -198,11 +198,11 @@ class UserViewSet(
     # ======================
     def create(self, request, *args, **kwargs):
         """Create a new user. Only admins can create users."""
-        # if not self._is_admin(request.user) and not request.user.is_superuser:
-        #     return Response(
-        #         {"error": "Only administrators can create users"},
-        #         status=status.HTTP_403_FORBIDDEN
-        #     )
+        if not self._is_admin(request.user) and not request.user.is_superuser:
+            return Response(
+                {"error": "Only administrators can create users"},
+                status=status.HTTP_403_FORBIDDEN
+            )
         
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -344,11 +344,11 @@ class UserViewSet(
         """Reset a user's password to default."""
         user = self.get_object()
 
-        # if not self._is_admin(request.user) and not request.user.is_superuser:
-        #     return Response(
-        #         {"error": "Only administrators can reset passwords"},
-        #         status=status.HTTP_403_FORBIDDEN
-        #     )
+        if not self._is_admin(request.user) and not request.user.is_superuser:
+            return Response(
+                {"error": "Only administrators can reset passwords"},
+                status=status.HTTP_403_FORBIDDEN
+            )
 
         default_password = request.data.get("password", "support123")
         user.set_password(default_password)
