@@ -150,17 +150,24 @@ class User(AbstractUser):
     # ======================
     # PASSWORD OVERRIDE (NEW)
     # ======================
+    
     def set_password(self, raw_password):
         """
         Override set_password to track password changes.
         Marks is_default_password as False when password is changed.
         """
         super().set_password(raw_password)
+
         self.is_default_password = False
         self.last_password_change = timezone.now()
-        # Save the user to persist the changes
-        self.save(update_fields=['is_default_password', 'last_password_change'])
 
+        # Only update database if user already exists
+        if self.pk:
+            self.save(update_fields=[
+                'password',
+                'is_default_password',
+                'last_password_change'
+            ])
     def is_using_default_password(self):
         """
         Check if user is still using the default password.
