@@ -196,24 +196,14 @@ class UserViewSet(
     # ======================
     # CREATE
     # ======================
-    # def create(self, request, *args, **kwargs):
-    #     """Create a new user. Only admins can create users."""
-    #     if not self._is_admin(request.user) and not request.user.is_superuser:
-    #         return Response(
-    #             {"error": "Only administrators can create users"},
-    #             status=status.HTTP_403_FORBIDDEN
-    #         )
-        
-    #     serializer = self.get_serializer(data=request.data)
-    #     serializer.is_valid(raise_exception=True)
-    #     user = serializer.save()
-
-    #     return Response(
-    #         UserSerializer(user).data,
-    #         status=status.HTTP_201_CREATED
-    #     )
     def create(self, request, *args, **kwargs):
-        """Create a new user."""
+        """Create a new user. Only admins can create users."""
+        # if not self._is_admin(request.user) and not request.user.is_superuser:
+        #     return Response(
+        #         {"error": "Only administrators can create users"},
+        #         status=status.HTTP_403_FORBIDDEN
+        #     )
+        
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
@@ -222,6 +212,7 @@ class UserViewSet(
             UserSerializer(user).data,
             status=status.HTTP_201_CREATED
         )
+
     # ======================
     # UPDATE
     # ======================
