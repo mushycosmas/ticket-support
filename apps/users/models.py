@@ -12,9 +12,18 @@ from apps.roles.models import Role
 # 👥 TEAM MODEL
 # ======================
 class Team(models.Model):
-    name = models.CharField(max_length=255, unique=True)
-    description = models.TextField(blank=True, null=True)
 
+    name = models.CharField(
+        max_length=255,
+        unique=True
+    )
+
+    description = models.TextField(
+        blank=True,
+        null=True
+    )
+
+    # One user can lead many teams
     lead = models.ForeignKey(
         'User',
         on_delete=models.SET_NULL,
@@ -23,8 +32,13 @@ class Team(models.Model):
         related_name='leading_teams'
     )
 
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
+    created_at = models.DateTimeField(
+        auto_now_add=True
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True
+    )
 
     class Meta:
         ordering = ['-created_at']
@@ -40,12 +54,12 @@ class Team(models.Model):
 
 
 # ======================
-# 👤 USER MODEL (RBAC CLEAN)
+# 👤 USER MODEL
 # ======================
 class User(AbstractUser):
 
     # ======================
-    # ROLE (FROM ROLE TABLE)
+    # ROLE
     # ======================
     role = models.ForeignKey(
         Role,
@@ -54,13 +68,14 @@ class User(AbstractUser):
         blank=True,
         related_name="users"
     )
-    
+
     rank = models.CharField(
         max_length=50,
         null=True,
         blank=True
     )
-    
+
+
     # ======================
     # CONTACT
     # ======================
@@ -81,6 +96,7 @@ class User(AbstractUser):
         ]
     )
 
+
     # ======================
     # PROFILE
     # ======================
@@ -90,43 +106,63 @@ class User(AbstractUser):
         blank=True
     )
 
-    bio = models.TextField(max_length=500, blank=True, null=True)
+    bio = models.TextField(
+        max_length=500,
+        blank=True,
+        null=True
+    )
+
 
     # ======================
-    # TEAM
+    # TEAMS
+    # User can belong to many teams
     # ======================
-    team = models.ForeignKey(
+    teams = models.ManyToManyField(
         Team,
-        on_delete=models.SET_NULL,
-        null=True,
         blank=True,
         related_name='members'
     )
 
+
     # ======================
     # STATUS
     # ======================
-    is_available = models.BooleanField(default=True)
+    is_available = models.BooleanField(
+        default=True
+    )
+
 
     # ======================
-    # PASSWORD TRACKING (NEW)
+    # PASSWORD TRACKING
     # ======================
     is_default_password = models.BooleanField(
         default=True,
-        help_text="Indicates if user is still using the default password (support123)"
+        help_text="Indicates if user is still using the default password"
     )
+
     last_password_change = models.DateTimeField(
         null=True,
         blank=True,
         help_text="Timestamp of the last password change"
     )
 
+
     # ======================
     # TIMESTAMPS
     # ======================
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    last_activity = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(
+        auto_now_add=True
+    )
+
+    updated_at = models.DateTimeField(
+        auto_now=True
+    )
+
+    last_activity = models.DateTimeField(
+        null=True,
+        blank=True
+    )
+
 
     # ======================
     # META
@@ -136,51 +172,45 @@ class User(AbstractUser):
         verbose_name = "User"
         verbose_name_plural = "Users"
 
+
     def __str__(self):
         return self.get_full_name() or self.username
 
-    # ======================
-    # SAVE OVERRIDE
-    # ======================
-    def save(self, *args, **kwargs):
-        if not self.last_activity:
-            self.last_activity = timezone.now()
-        super().save(*args, **kwargs)
 
     # ======================
-    # PASSWORD OVERRIDE (NEW)
+    # SAVE
     # ======================
-    
+    def save(self, *args, **kwargs):
+
+        if not self.last_activity:
+            self.last_activity = timezone.now()
+
+        super().save(*args, **kwargs)
+
+
+    # ======================
+    # PASSWORD TRACKING
+    # ======================
     def set_password(self, raw_password):
-        """
-        Override set_password to track password changes.
-        Marks is_default_password as False when password is changed.
-        """
+
         super().set_password(raw_password)
 
         self.is_default_password = False
         self.last_password_change = timezone.now()
 
-        # Only update database if user already exists
         if self.pk:
-            self.save(update_fields=[
-                'password',
-                'is_default_password',
-                'last_password_change'
-            ])
+            self.save(
+                update_fields=[
+                    'password',
+                    'is_default_password',
+                    'last_password_change'
+                ]
+            )
+
+
     def is_using_default_password(self):
-        """
-        Check if user is still using the default password.
-        Returns True if user hasn't changed their password.
-        """
         return self.is_default_password
 
-    def needs_password_change(self):
-        """
-        Check if user needs to change their password.
-        Alias for is_using_default_password for better readability.
-        """
-        return self.is_default_password
 
     # ======================
     # PROPERTIES
@@ -189,62 +219,103 @@ class User(AbstractUser):
     def full_name(self):
         return self.get_full_name() or self.username
 
+
     @property
     def role_name(self):
         return self.role.name if self.role else None
 
+
     @property
-    def team_name(self):
-        return self.team.name if self.team else None
+    def team_names(self):
+        """
+        Return all teams assigned to user
+        """
+        return list(
+            self.teams.values_list(
+                'name',
+                flat=True
+            )
+        )
+
 
     @property
     def needs_password_change(self):
-        """Property for serializers to check if user needs to change password."""
         return self.is_default_password
 
+
     # ======================
-    # PERMISSIONS (DJANGO NATIVE)
+    # PERMISSIONS
     # ======================
     def get_role_permissions(self):
-        """
-        Returns permissions from Role (many-to-many)
-        """
+
         if self.role:
             return self.role.permissions.all()
+
         return Permission.objects.none()
 
+
     def has_role_permission(self, codename):
-        """
-        Check permission from Role
-        """
-        return self.get_role_permissions().filter(codename=codename).exists()
+
+        return self.get_role_permissions().filter(
+            codename=codename
+        ).exists()
+
 
     # ======================
-    # TICKET STATS
+    # TICKET STATISTICS
     # ======================
     @property
     def total_tickets_assigned(self):
+
         from apps.tickets.models import Ticket
-        return Ticket.objects.filter(assigned_to=self).count()
+
+        return Ticket.objects.filter(
+            assigned_to=self
+        ).count()
+
 
     @property
     def open_tickets(self):
+
         from apps.tickets.models import Ticket
-        return Ticket.objects.filter(assigned_to=self, status='OPEN').count()
+
+        return Ticket.objects.filter(
+            assigned_to=self,
+            status='OPEN'
+        ).count()
+
 
     @property
     def in_progress_tickets(self):
+
         from apps.tickets.models import Ticket
-        return Ticket.objects.filter(assigned_to=self, status='IN_PROGRESS').count()
+
+        return Ticket.objects.filter(
+            assigned_to=self,
+            status='IN_PROGRESS'
+        ).count()
+
 
     @property
     def resolved_tickets(self):
+
         from apps.tickets.models import Ticket
-        return Ticket.objects.filter(assigned_to=self, status='RESOLVED').count()
+
+        return Ticket.objects.filter(
+            assigned_to=self,
+            status='RESOLVED'
+        ).count()
+
 
     # ======================
     # ACTIVITY
     # ======================
     def update_last_activity(self):
+
         self.last_activity = timezone.now()
-        self.save(update_fields=['last_activity'])
+
+        self.save(
+            update_fields=[
+                'last_activity'
+            ]
+        )

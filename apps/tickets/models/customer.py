@@ -25,9 +25,12 @@ class Customer(models.Model):
     # ======================
     full_name = models.CharField(max_length=255, db_index=True)
 
+    # ✅ Make email nullable and allow blank
     email = models.EmailField(
         validators=[EmailValidator(message="Enter a valid email address")],
-        db_index=True
+        db_index=True,
+        null=True,          # ✅ Allow NULL in database
+        blank=True          # ✅ Allow blank in forms
     )
 
     phone = models.CharField(
@@ -135,7 +138,9 @@ class Customer(models.Model):
         verbose_name_plural = "Customers"
 
     def __str__(self):
-        return f"{self.full_name} ({self.email})"
+        if self.full_name:
+            return f"{self.full_name} ({self.email or 'No Email'})"
+        return f"{self.email or self.phone or 'Customer'}"
 
     # ======================
     # UPDATE STATISTICS
@@ -161,41 +166,87 @@ class Customer(models.Model):
         ])
 
     # ======================
-    # SMART GET OR CREATE (FIXED: checks nida_number as well)
+    # SMART GET OR CREATE (UPDATED)
     # ======================
     @classmethod
-    def get_or_create_customer(cls, email, phone, full_name=None, **kwargs):
-        nida = kwargs.get("nida_number")
-        # Build query: match email, phone, OR nida_number (if provided)
-        query = Q(email=email) | Q(phone=phone)
-        if nida:
-            query |= Q(nida_number=nida)
+    def get_or_create_customer(cls, email=None, phone=None, full_name=None, **kwargs):
+        """
+        Get or create a customer.
         
+        Priority:
+        1. Find by NIDA number
+        2. Find by Email (if provided)
+        3. Find by Phone (if provided)
+        
+        Args:
+            email: Customer's email (optional)
+            phone: Customer's phone (required)
+            full_name: Customer's full name (optional)
+            **kwargs: Additional fields (nida_number, gender, etc.)
+        
+        Returns:
+            tuple: (customer, created)
+        """
+        nida = kwargs.get("nida_number")
+        gender = kwargs.get("gender")
+        
+        # Build query
+        query = Q()
+        
+        # If email is provided, add to query
+        if email and email.strip():
+            query |= Q(email=email.strip())
+        
+        # If phone is provided, add to query
+        if phone and phone.strip():
+            query |= Q(phone=phone.strip())
+        
+        # If NIDA is provided, add to query
+        if nida and nida.strip():
+            query |= Q(nida_number=nida.strip())
+        
+        # If no criteria provided, create new customer
+        if not query:
+            customer = cls.objects.create(
+                full_name=full_name or "Unknown",
+                email=email.strip() if email else None,
+                phone=phone.strip() if phone else None,
+                nida_number=nida.strip() if nida else None,
+                gender=gender,
+                **{k: v for k, v in kwargs.items() if k not in ("nida_number", "gender")}
+            )
+            return customer, True
+        
+        # Try to find existing customer
         customer = cls.objects.filter(query).first()
-
+        
         if customer:
             # Update existing customer with latest info
-            customer.full_name = full_name or customer.full_name
-            customer.email = email
-            customer.phone = phone
+            if full_name:
+                customer.full_name = full_name
             
-            # Update optional fields if provided and not None
-            if nida:
-                customer.nida_number = nida
-            if kwargs.get("gender"):
-                customer.gender = kwargs["gender"]
-            # Add any other fields you want to update here
+            if email and email.strip():
+                customer.email = email.strip()
+            
+            if phone and phone.strip():
+                customer.phone = phone.strip()
+            
+            if nida and nida.strip():
+                customer.nida_number = nida.strip()
+            
+            if gender:
+                customer.gender = gender
             
             customer.save()
             return customer, False
-
+        
         # Create new customer
         customer = cls.objects.create(
-            full_name=full_name or "Unknown",
-            email=email,
-            phone=phone,
-            nida_number=nida,
-            gender=kwargs.get("gender"),
+            full_name=full_name or email or phone or "Unknown",
+            email=email.strip() if email else None,
+            phone=phone.strip() if phone else None,
+            nida_number=nida.strip() if nida else None,
+            gender=gender,
             **{k: v for k, v in kwargs.items() if k not in ("nida_number", "gender")}
         )
         return customer, True

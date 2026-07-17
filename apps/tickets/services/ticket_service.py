@@ -140,15 +140,24 @@ class TicketService:
     def _get_team_lead(team):
         """
         Get the team lead for a given team.
-        Returns the first user with TEAM_LEAD role in the team.
+        ✅ FIXED: Uses the many-to-many relationship correctly.
         """
         if not team:
             return None
         
+        # ✅ FIX: Use the correct relationship - teams is a many-to-many field
+        # Find users who are members of this team AND have TEAM_LEAD role
         team_lead = User.objects.filter(
-            team=team,
+            teams=team,  # ✅ Correct: many-to-many relationship
             role__name="TEAM_LEAD"
         ).first()
+        
+        # If no team lead found, try to find any user with TEAM_LEAD role
+        if not team_lead:
+            team_lead = User.objects.filter(
+                teams=team,
+                role_name="TEAM_LEAD"
+            ).first()
         
         return team_lead
 
@@ -311,7 +320,7 @@ class TicketService:
             customer=customer,
             template_id=template_id,
             team_id=final_team_id,
-            assigned_to=team_lead,
+            assigned_to=team_lead if team_lead else None,
         )
 
         # ----- Override assigned_to if explicitly provided -----
@@ -412,9 +421,15 @@ class TicketService:
             if not worker.is_active:
                 raise ValidationError("Cannot assign to inactive user")
             
-            # Team leads can only assign workers from their team
-            if is_team_lead and worker.team_id != requesting_user.team_id:
-                raise ValidationError("You can only assign workers from your team")
+            # ✅ FIX: Use many-to-many relationship for team check
+            if is_team_lead:
+                # Check if worker is in the same team as the team lead
+                user_team_ids = requesting_user.teams.values_list('id', flat=True)
+                worker_team_ids = worker.teams.values_list('id', flat=True)
+                
+                # Check if they share at least one team
+                if not set(user_team_ids).intersection(set(worker_team_ids)):
+                    raise ValidationError("You can only assign workers from your team")
 
         old_assignee = ticket.assigned_to
         old_team = ticket.team
@@ -550,8 +565,14 @@ class TicketService:
         is_team_lead = TicketService._is_team_lead(user)
         is_assigned_worker = ticket.assigned_to and ticket.assigned_to.id == user.id
         
-        # Allow if: Admin OR Assigned Worker (AGENT/SUPPORT) OR Team Lead
-        if not (is_admin or is_assigned_worker or (is_team_lead and ticket.team_id == user.team_id)):
+        # ✅ FIX: Check if team lead belongs to the ticket's team
+        is_team_lead_of_ticket = False
+        if is_team_lead and ticket.team_id:
+            # Check if user is a member of the ticket's team
+            is_team_lead_of_ticket = user.teams.filter(id=ticket.team_id).exists()
+        
+        # Allow if: Admin OR Assigned Worker (AGENT/SUPPORT) OR Team Lead of the ticket's team
+        if not (is_admin or is_assigned_worker or is_team_lead_of_ticket):
             raise PermissionDenied(
                 "You don't have permission to start progress on this ticket. "
                 "Only the assigned agent/support, team lead, or admin can do this."
@@ -588,10 +609,14 @@ class TicketService:
         
         # Check permission to resolve
         is_admin = TicketService._is_admin(user)
-        is_team_lead = TicketService._is_team_lead(user)
         is_assigned_worker = ticket.assigned_to and ticket.assigned_to.id == user.id
         
-        if not (is_admin or is_assigned_worker or (is_team_lead and ticket.team_id == user.team_id)):
+        # ✅ FIX: Check if team lead belongs to the ticket's team
+        is_team_lead_of_ticket = False
+        if user and ticket.team_id:
+            is_team_lead_of_ticket = user.teams.filter(id=ticket.team_id).exists()
+        
+        if not (is_admin or is_assigned_worker or is_team_lead_of_ticket):
             raise PermissionDenied(
                 "You don't have permission to resolve this ticket. "
                 "Only the assigned agent/support, team lead, or admin can do this."
@@ -621,10 +646,14 @@ class TicketService:
         user = request.user if request.user.is_authenticated else None
         
         is_admin = TicketService._is_admin(user)
-        is_team_lead = TicketService._is_team_lead(user)
         is_assigned_worker = ticket.assigned_to and ticket.assigned_to.id == user.id
         
-        if not (is_admin or is_assigned_worker or (is_team_lead and ticket.team_id == user.team_id)):
+        # ✅ FIX: Check if team lead belongs to the ticket's team
+        is_team_lead_of_ticket = False
+        if user and ticket.team_id:
+            is_team_lead_of_ticket = user.teams.filter(id=ticket.team_id).exists()
+        
+        if not (is_admin or is_assigned_worker or is_team_lead_of_ticket):
             raise PermissionDenied(
                 "You don't have permission to close this ticket. "
                 "Only the assigned agent/support, team lead, or admin can do this."
@@ -651,10 +680,14 @@ class TicketService:
         user = request.user if request.user.is_authenticated else None
         
         is_admin = TicketService._is_admin(user)
-        is_team_lead = TicketService._is_team_lead(user)
         is_assigned_worker = ticket.assigned_to and ticket.assigned_to.id == user.id
         
-        if not (is_admin or is_assigned_worker or (is_team_lead and ticket.team_id == user.team_id)):
+        # ✅ FIX: Check if team lead belongs to the ticket's team
+        is_team_lead_of_ticket = False
+        if user and ticket.team_id:
+            is_team_lead_of_ticket = user.teams.filter(id=ticket.team_id).exists()
+        
+        if not (is_admin or is_assigned_worker or is_team_lead_of_ticket):
             raise PermissionDenied(
                 "You don't have permission to reopen this ticket. "
                 "Only the assigned agent/support, team lead, or admin can do this."

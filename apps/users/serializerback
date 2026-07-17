@@ -1,120 +1,26 @@
+# apps/users/serializers.py
+
 from rest_framework import serializers
+from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
 
-from .models import User, Team
 from apps.roles.models import Role
+from apps.tickets.models import Ticket
+from .models import Team
 
 
-# ==========================
-# TEAM MEMBER SERIALIZER
-# ==========================
-class TeamMemberSerializer(serializers.ModelSerializer):
-    full_name = serializers.SerializerMethodField()
-
-    # ✅ FIXED: changed from role.id → role_id (safe DB column)
-    role_id = serializers.IntegerField(source="role_id", read_only=True)
-
-    # ⚠️ KEEP BUT SAFE (uses FK relation, not raw column)
-    role_name = serializers.CharField(source="role.name", read_only=True)
-
-    class Meta:
-        model = User
-        fields = [
-            "id",
-            "username",
-            "email",
-            "first_name",
-            "last_name",
-            "full_name",
-            "rank",
-            "profile_picture",
-
-            # role fields
-            "role_id",
-            "role_name",
-        ]
-
-    def get_full_name(self, obj):
-        return obj.get_full_name() or obj.username
+User = get_user_model()
 
 
-# ==========================
-# TEAM SERIALIZER
-# ==========================
-class TeamSerializer(serializers.ModelSerializer):
-    member_count = serializers.IntegerField(read_only=True)
-
-    lead_name = serializers.SerializerMethodField()
-
-    members = TeamMemberSerializer(many=True, read_only=True)
-
-    class Meta:
-        model = Team
-        fields = [
-            "id",
-            "name",
-            "description",
-            "lead",
-            "lead_name",
-            "member_count",
-            "members",
-            "created_at",
-            "updated_at",
-        ]
-
-    def get_lead_name(self, obj):
-        if obj.lead:
-            return obj.lead.get_full_name() or obj.lead.username
-        return None
-
-
-# ==========================
-# ROLE SERIALIZER
-# ==========================
-class RoleSerializer(serializers.ModelSerializer):
-    permissions = serializers.SerializerMethodField()
-
-    class Meta:
-        model = Role
-        fields = [
-            "id",
-            "name",
-            "description",
-            "permissions",
-        ]
-
-    def get_permissions(self, obj):
-        return list(
-            obj.permissions.values_list(
-                "codename",
-                flat=True
-            )
-        )
-
-
-# ==========================
-# USER SERIALIZER
-# ==========================
+# ============================================================
+# 👤 USER SERIALIZER (READ)
+# ============================================================
 class UserSerializer(serializers.ModelSerializer):
+
     full_name = serializers.SerializerMethodField()
-
-    # ==========================
-    # FIXED: role mapping
-    # ==========================
-
-    # ❌ OLD: source="role.id" (caused SQL error)
-    # ✔ NEW: use real DB column
-    role_id = serializers.IntegerField(source="role_id", read_only=True)
-
-    # ⚠️ SAFE: still uses relation, but ok since FK exists
-    role_name = serializers.CharField(source="role.name", read_only=True)
-
-    # ==========================
-    # TEAM
-    # ==========================
-    team_id = serializers.IntegerField(source="team_id", read_only=True)
-    team_name = serializers.CharField(source="team.name", read_only=True)
-
+    teams = serializers.SerializerMethodField()
     permissions = serializers.SerializerMethodField()
+    role_name = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -126,46 +32,496 @@ class UserSerializer(serializers.ModelSerializer):
             "last_name",
             "full_name",
             "rank",
-            "phone",
-            "bio",
             "profile_picture",
 
-            # role
-            "role_id",   # ✅ FIX APPLIED
-            "role_name", # (safe FK access)
+            "role",
+            "role_name",
 
-            # team
-            "team_id",
-            "team_name",
+            "teams",
 
-            "is_available",
             "is_active",
             "is_staff",
             "is_superuser",
 
+            "is_default_password",
+
             "last_login",
             "date_joined",
-            "created_at",
-            "updated_at",
 
             "permissions",
         ]
 
+
     def get_full_name(self, obj):
         return obj.get_full_name() or obj.username
 
+
+    def get_teams(self, obj):
+
+        return [
+            {
+                "id": team.id,
+                "name": team.name
+            }
+            for team in obj.teams.all()
+        ]
+
+
     def get_permissions(self, obj):
-        # superuser override
+
         if obj.is_superuser:
             return ["*"]
 
-        # FIX: safe null check
-        if not obj.role:
-            return []
-
-        return list(
-            obj.role.permissions.values_list(
-                "codename",
-                flat=True
+        if obj.role:
+            return list(
+                obj.role.permissions.values_list(
+                    "codename",
+                    flat=True
+                )
             )
+
+        return []
+
+
+    def get_role_name(self, obj):
+        return getattr(obj.role, "name", None)
+
+
+
+# ============================================================
+# 👤 CHANGE PASSWORD SERIALIZER
+# ============================================================
+class ChangePasswordSerializer(serializers.Serializer):
+
+    old_password = serializers.CharField(
+        required=True
+    )
+
+    new_password = serializers.CharField(
+        required=True,
+        validators=[validate_password]
+    )
+
+    confirm_password = serializers.CharField(
+        required=True
+    )
+
+
+    def validate(self, data):
+
+        if data["new_password"] != data["confirm_password"]:
+
+            raise serializers.ValidationError(
+                {
+                    "confirm_password":
+                    "New passwords do not match"
+                }
+            )
+
+        return data
+
+
+
+# ============================================================
+# 👤 CREATE USER SERIALIZER
+# ============================================================
+class UserCreateSerializer(serializers.ModelSerializer):
+
+    password = serializers.CharField(
+        write_only=True,
+        required=True
+    )
+
+    password_confirm = serializers.CharField(
+        write_only=True,
+        required=True
+    )
+
+
+    role_id = serializers.PrimaryKeyRelatedField(
+        source="role",
+        queryset=Role.objects.all(),
+        required=False,
+        allow_null=True
+    )
+
+
+    teams = serializers.PrimaryKeyRelatedField(
+        queryset=Team.objects.all(),
+        many=True,
+        required=False
+    )
+
+
+    class Meta:
+
+        model = User
+
+        fields = [
+            "username",
+            "email",
+
+            "password",
+            "password_confirm",
+
+            "first_name",
+            "last_name",
+
+            "rank",
+
+            "profile_picture",
+
+            "role_id",
+
+            "teams",
+        ]
+
+
+
+    def validate(self, data):
+
+        if data["password"] != data["password_confirm"]:
+
+            raise serializers.ValidationError(
+                {
+                    "password":
+                    "Passwords do not match"
+                }
+            )
+
+        return data
+
+
+
+    def create(self, validated_data):
+
+        validated_data.pop(
+            "password_confirm"
+        )
+
+        password = validated_data.pop(
+            "password"
+        )
+
+
+        teams = validated_data.pop(
+            "teams",
+            []
+        )
+
+
+        user = User(**validated_data)
+
+        user.set_password(password)
+
+        user.save()
+
+
+        user.teams.set(
+            teams
+        )
+
+
+        return user
+
+
+
+# ============================================================
+# 👤 UPDATE USER SERIALIZER
+# ============================================================
+class UserUpdateSerializer(serializers.ModelSerializer):
+
+
+    role_id = serializers.PrimaryKeyRelatedField(
+        source="role",
+        queryset=Role.objects.all(),
+        required=False,
+        allow_null=True
+    )
+
+
+    teams = serializers.PrimaryKeyRelatedField(
+        queryset=Team.objects.all(),
+        many=True,
+        required=False
+    )
+
+
+    class Meta:
+
+        model = User
+
+        fields = [
+
+            "first_name",
+            "last_name",
+
+            "email",
+
+            "role_id",
+
+            "rank",
+
+            "profile_picture",
+
+            "teams",
+
+            "is_active",
+
+        ]
+
+
+
+    def update(self, instance, validated_data):
+
+        teams = validated_data.pop(
+            "teams",
+            None
+        )
+
+
+        for attr, value in validated_data.items():
+
+            setattr(
+                instance,
+                attr,
+                value
+            )
+
+
+        instance.save()
+
+
+        if teams is not None:
+
+            instance.teams.set(
+                teams
+            )
+
+
+        return instance
+
+
+
+# ============================================================
+# 🎟 USER TICKETS SERIALIZER
+# ============================================================
+class UserTicketSerializer(serializers.ModelSerializer):
+
+    customer_name = serializers.SerializerMethodField()
+
+    assigned_to_name = serializers.SerializerMethodField()
+
+
+    class Meta:
+
+        model = Ticket
+
+        fields = [
+
+            "id",
+
+            "ticket_number",
+
+            "title",
+
+            "description",
+
+            "status",
+
+            "priority",
+
+            "created_at",
+
+            "updated_at",
+
+            "resolved_at",
+
+            "customer_name",
+
+            "assigned_to_name",
+
+        ]
+
+
+
+    def get_customer_name(self, obj):
+
+        return (
+            obj.customer.full_name
+            if obj.customer
+            else None
+        )
+
+
+
+    def get_assigned_to_name(self, obj):
+
+        return (
+            obj.assigned_to.get_full_name()
+            if obj.assigned_to
+            else None
+        )
+
+
+
+# ============================================================
+# 📊 USER STATS SERIALIZER
+# ============================================================
+class UserStatsSerializer(serializers.Serializer):
+
+    total_assigned = serializers.IntegerField()
+
+    total_open = serializers.IntegerField()
+
+    total_in_progress = serializers.IntegerField()
+
+    total_resolved = serializers.IntegerField()
+
+    total_closed = serializers.IntegerField()
+
+
+
+# ============================================================
+# 👥 TEAM SERIALIZER
+# ============================================================
+class TeamSerializer(serializers.ModelSerializer):
+
+    member_count = serializers.SerializerMethodField()
+
+    lead_name = serializers.SerializerMethodField()
+
+
+    class Meta:
+
+        model = Team
+
+        fields = [
+
+            "id",
+
+            "name",
+
+            "description",
+
+            "lead",
+
+            "lead_name",
+
+            "member_count",
+
+        ]
+
+
+
+    def get_member_count(self, obj):
+
+        return obj.members.count()
+
+
+
+    def get_lead_name(self, obj):
+
+        if obj.lead:
+
+            return obj.lead.get_full_name() or obj.lead.username
+
+        return None
+
+
+
+# ============================================================
+# 👥 TEAM CREATE SERIALIZER
+# ============================================================
+class TeamCreateSerializer(serializers.ModelSerializer):
+
+    class Meta:
+
+        model = Team
+
+        fields = [
+
+            "name",
+
+            "description",
+
+            "lead",
+
+        ]
+
+
+
+# ============================================================
+# 👥 TEAM UPDATE SERIALIZER
+# ============================================================
+class TeamUpdateSerializer(serializers.ModelSerializer):
+
+    class Meta:
+
+        model = Team
+
+        fields = [
+
+            "name",
+
+            "description",
+
+            "lead",
+
+        ]
+
+
+
+# ============================================================
+# 👥 TEAM MEMBERS SERIALIZER
+# ============================================================
+class TeamMemberSerializer(serializers.ModelSerializer):
+
+    full_name = serializers.SerializerMethodField()
+
+    role_name = serializers.SerializerMethodField()
+
+
+    class Meta:
+
+        model = User
+
+        fields = [
+
+            "id",
+
+            "username",
+
+            "email",
+
+            "first_name",
+
+            "last_name",
+
+            "full_name",
+
+            "rank",
+
+            "profile_picture",
+
+            "role",
+
+            "role_name",
+
+        ]
+
+
+
+    def get_full_name(self, obj):
+
+        return obj.get_full_name() or obj.username
+
+
+
+    def get_role_name(self, obj):
+
+        return getattr(
+            obj.role,
+            "name",
+            None
         )

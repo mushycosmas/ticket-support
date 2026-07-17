@@ -1,0 +1,635 @@
+# apps/users/views/team_views.py
+
+from rest_framework import viewsets, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from django.db.models import Q
+
+from ..models import Team, User
+from ..serializers import (
+    TeamSerializer,
+    UserSerializer,
+    UserTicketSerializer
+)
+
+from .mixins import TeamViewSetPermissions, TicketStatsMixin
+from .base import BaseViewSetMixin
+
+from apps.tickets.models import Ticket
+
+
+class TeamViewSet(
+    TeamViewSetPermissions,
+    TicketStatsMixin,
+    BaseViewSetMixin,
+    viewsets.ModelViewSet
+):
+
+    queryset = Team.objects.all()
+    serializer_class = TeamSerializer
+
+    # ======================================================
+    # PERMISSION HELPERS
+    # ======================================================
+
+    def has_permission(self, user, permission_codename):
+        """
+        Check if user has a specific permission.
+        
+        Permissions:
+        - view_team: Can view teams
+        - add_team: Can create teams
+        - change_team: Can edit teams
+        - delete_team: Can delete teams
+        - add_userteam: Can add users to teams
+        - change_userteam: Can change user team assignments
+        - delete_userteam: Can remove users from teams
+        """
+        if user.is_superuser:
+            return True
+
+        if user.role and user.role.name == "ADMIN":
+            return True
+
+        if hasattr(user, 'role') and user.role:
+            return user.role.permissions.filter(codename=permission_codename).exists()
+
+        return False
+
+    def can_view_team(self, user):
+        return self.has_permission(user, 'view_team')
+
+    def can_add_team(self, user):
+        return self.has_permission(user, 'add_team')
+
+    def can_change_team(self, user):
+        return self.has_permission(user, 'change_team')
+
+    def can_delete_team(self, user):
+        return self.has_permission(user, 'delete_team')
+
+    def can_add_user_to_team(self, user):
+        return self.has_permission(user, 'add_userteam')
+
+    def can_change_user_team(self, user):
+        return self.has_permission(user, 'change_userteam')
+
+    def can_delete_user_from_team(self, user):
+        return self.has_permission(user, 'delete_userteam')
+
+    # ======================================================
+    # QUERYSET
+    # ======================================================
+
+    def get_queryset(self):
+        user = self.request.user
+        
+        # Check if user can view teams
+        if not self.can_view_team(user):
+            return Team.objects.none()
+
+        if user.role and user.role.name == "ADMIN":
+            return Team.objects.all()
+
+        elif user.role and user.role.name in ["TEAM_LEAD", "AGENT"]:
+            return Team.objects.filter(members=user)
+
+        return Team.objects.none()
+
+    # ======================================================
+    # LIST TEAMS
+    # ======================================================
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+
+        search = request.query_params.get("search")
+
+        if search:
+            queryset = queryset.filter(
+                Q(name__icontains=search) |
+                Q(description__icontains=search)
+            )
+
+        serializer = TeamSerializer(
+            queryset,
+            many=True
+        )
+
+        return Response({
+            "count": queryset.count(),
+            "results": serializer.data
+        })
+
+    # ======================================================
+    # RETRIEVE TEAM
+    # ======================================================
+
+    def retrieve(self, request, *args, **kwargs):
+        team = self.get_object()
+
+        # Check if user can view this team
+        if not self.can_view_team(request.user):
+            return Response(
+                {"error": "You don't have permission to view this team"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        serializer = self.get_serializer(team)
+
+        data = serializer.data
+
+        data["member_count"] = team.members.count()
+
+        return Response(data)
+
+    # ======================================================
+    # CREATE TEAM
+    # ======================================================
+
+    def create(self, request, *args, **kwargs):
+        # ✅ Check if user has permission to create teams
+        if not self.can_add_team(request.user):
+            return Response(
+                {"error": "You don't have permission to create teams"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        serializer = self.get_serializer(
+            data=request.data
+        )
+
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        team = serializer.save()
+
+        return Response(
+            TeamSerializer(team).data,
+            status=status.HTTP_201_CREATED
+        )
+
+    # ======================================================
+    # UPDATE TEAM
+    # ======================================================
+
+    def update(self, request, *args, **kwargs):
+        # ✅ Check if user has permission to edit teams
+        if not self.can_change_team(request.user):
+            return Response(
+                {"error": "You don't have permission to edit teams"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        team = self.get_object()
+
+        serializer = self.get_serializer(
+            team,
+            data=request.data,
+            partial=kwargs.pop(
+                "partial",
+                False
+            )
+        )
+
+        serializer.is_valid(
+            raise_exception=True
+        )
+
+        serializer.save()
+
+        return Response(
+            serializer.data
+        )
+
+    # ======================================================
+    # DELETE TEAM
+    # ======================================================
+
+    def destroy(self, request, *args, **kwargs):
+        # ✅ Check if user has permission to delete teams
+        if not self.can_delete_team(request.user):
+            return Response(
+                {"error": "You don't have permission to delete teams"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        team = self.get_object()
+
+        # Check if team has active tickets
+        if Ticket.objects.filter(team=team, status__in=['OPEN', 'IN_PROGRESS']).exists():
+            return Response(
+                {"error": "Cannot delete team with active tickets. Please reassign or resolve them first."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        team.delete()
+
+        return Response({
+            "message": "Team deleted successfully"
+        })
+
+    # ======================================================
+    # TEAM MEMBERS
+    # ======================================================
+
+    @action(
+        detail=True,
+        methods=["get"]
+    )
+    def members(self, request, pk=None):
+        team = self.get_object()
+
+        # ✅ Check if user can view team members
+        if not self.can_view_team(request.user):
+            return Response(
+                {"error": "You don't have permission to view team members"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        members = team.members.all()
+
+        serializer = UserSerializer(
+            members,
+            many=True
+        )
+
+        return Response(serializer.data)
+
+    # ======================================================
+    # ADD MEMBER (With Permission Check)
+    # ======================================================
+
+    @action(
+        detail=True,
+        methods=["post"]
+    )
+    def add_member(self, request, pk=None):
+        team = self.get_object()
+
+        user_id = request.data.get("user_id")
+        current_user = request.user
+
+        # ✅ Check if user has permission to add members
+        if not self.can_add_user_to_team(current_user):
+            return Response(
+                {"error": "You don't have permission to add members to teams"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Check if user is ADMIN or TEAM_LEAD of this team
+        is_admin = current_user.role and current_user.role.name == "ADMIN"
+        is_team_lead = (
+            current_user.role
+            and current_user.role.name == "TEAM_LEAD"
+            and team.members.filter(id=current_user.id).exists()
+        )
+
+        if not (is_admin or is_team_lead):
+            return Response(
+                {"error": "You don't have permission to add members to this team"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if not user_id:
+            return Response(
+                {"error": "user_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            user = User.objects.get(id=user_id)
+
+            # Check if user is already a member
+            if team.members.filter(id=user.id).exists():
+                return Response(
+                    {"error": f"User {user.get_full_name() or user.username} is already a member of this team"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Add user to many-to-many
+            team.members.add(user)
+
+            return Response({
+                "message": f"{user.get_full_name() or user.username} added to {team.name}",
+                "member_count": team.members.count()
+            }, status=status.HTTP_200_OK)
+
+        except User.DoesNotExist:
+            return Response(
+                {"error": "User not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+    # ======================================================
+    # REMOVE MEMBER (With Permission Check)
+    # ======================================================
+
+    @action(
+        detail=True,
+        methods=["delete"]
+    )
+    def remove_member(self, request, pk=None):
+        team = self.get_object()
+        user_id = request.data.get("user_id")
+        current_user = request.user
+
+        # ✅ Check if user has permission to remove members
+        if not self.can_delete_user_from_team(current_user):
+            return Response(
+                {"error": "You don't have permission to remove members from teams"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Check if user is ADMIN or TEAM_LEAD of this team
+        is_admin = current_user.role and current_user.role.name == "ADMIN"
+        is_team_lead = (
+            current_user.role
+            and current_user.role.name == "TEAM_LEAD"
+            and team.members.filter(id=current_user.id).exists()
+        )
+
+        if not (is_admin or is_team_lead):
+            return Response(
+                {"error": "You don't have permission to remove members from this team"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        if not user_id:
+            return Response(
+                {"error": "user_id required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            user = User.objects.get(id=user_id)
+
+            # Prevent removing the team lead
+            if team.lead_id == user.id:
+                return Response(
+                    {"error": "Cannot remove the team lead from the team"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Check if user is trying to remove themselves
+            if user.id == current_user.id:
+                return Response(
+                    {"error": "You cannot remove yourself from the team"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            team.members.remove(user)
+
+            return Response({
+                "message": "Member removed successfully",
+                "member_count": team.members.count()
+            }, status=status.HTTP_200_OK)
+
+        except User.DoesNotExist:
+            return Response(
+                {"error": "User not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+    # ======================================================
+    # TEAM TICKETS
+    # ======================================================
+
+    @action(
+        detail=True,
+        methods=["get"]
+    )
+    def tickets(self, request, pk=None):
+        team = self.get_object()
+
+        # ✅ Check if user can view team tickets
+        if not self.can_view_team(request.user):
+            return Response(
+                {"error": "You don't have permission to view team tickets"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        tickets = Ticket.objects.filter(
+            team=team
+        ).order_by(
+            "-created_at"
+        )
+
+        # Apply status filter
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            tickets = tickets.filter(status=status_filter.upper())
+
+        # Apply priority filter
+        priority_filter = request.query_params.get('priority')
+        if priority_filter:
+            tickets = tickets.filter(priority=priority_filter.upper())
+
+        # Pagination
+        page = int(request.query_params.get('page', 1))
+        page_size = int(request.query_params.get('page_size', 20))
+        
+        total = tickets.count()
+        start = (page - 1) * page_size
+        end = start + page_size
+        paginated_tickets = tickets[start:end]
+
+        serializer = UserTicketSerializer(
+            paginated_tickets,
+            many=True
+        )
+
+        return Response({
+            "count": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size if total > 0 else 0,
+            "results": serializer.data
+        })
+
+    # ======================================================
+    # TEAM STATISTICS
+    # ======================================================
+
+    @action(
+        detail=True,
+        methods=["get"]
+    )
+    def stats(self, request, pk=None):
+        team = self.get_object()
+
+        # ✅ Check if user can view team stats
+        if not self.can_view_team(request.user):
+            return Response(
+                {"error": "You don't have permission to view team statistics"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        tickets = Ticket.objects.filter(team=team)
+
+        # Priority breakdown
+        priority_stats = {
+            'critical': tickets.filter(priority='CRITICAL').count(),
+            'high': tickets.filter(priority='HIGH').count(),
+            'medium': tickets.filter(priority='MEDIUM').count(),
+            'low': tickets.filter(priority='LOW').count(),
+        }
+
+        return Response({
+            "total_tickets": tickets.count(),
+            "open": tickets.filter(status="OPEN").count(),
+            "in_progress": tickets.filter(status="IN_PROGRESS").count(),
+            "resolved": tickets.filter(status="RESOLVED").count(),
+            "closed": tickets.filter(status="CLOSED").count(),
+            "escalated": tickets.filter(status="ESCALATED").count(),
+            "by_priority": priority_stats
+        })
+
+    # ======================================================
+    # MY TEAM
+    # ======================================================
+
+    @action(
+        detail=False,
+        methods=["get"]
+    )
+    def my_team(self, request):
+        user = request.user
+
+        team = Team.objects.filter(members=user).first()
+
+        if not team:
+            return Response(
+                {"error": "You are not assigned to any team"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = TeamSerializer(team)
+
+        return Response(serializer.data)
+
+    # ======================================================
+    # MY TEAMS (Multiple teams support)
+    # ======================================================
+
+    @action(
+        detail=False,
+        methods=["get"]
+    )
+    def my_teams(self, request):
+        user = request.user
+
+        teams = Team.objects.filter(members=user)
+
+        serializer = TeamSerializer(teams, many=True)
+
+        return Response({
+            "count": teams.count(),
+            "results": serializer.data
+        })
+
+    # ======================================================
+    # AVAILABLE MEMBERS
+    # ======================================================
+
+    @action(
+        detail=False,
+        methods=["get"]
+    )
+    def available_members(self, request):
+        # ✅ Check if user can view users
+        if not self.can_view_team(request.user):
+            return Response(
+                {"error": "You don't have permission to view available members"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Get users that are not in any team
+        users = User.objects.filter(teams__isnull=True)
+
+        # Get current user's team if they are a team lead
+        current_user = request.user
+        is_team_lead = current_user.role and current_user.role.name == "TEAM_LEAD"
+        
+        if is_team_lead:
+            # Team leads can only see users that can be added to their team
+            # Filter by role: AGENT or SUPPORT
+            users = users.filter(
+                Q(role__name='AGENT') | 
+                Q(role__name='SUPPORT') |
+                Q(role__name='USER')
+            )
+
+        search = request.query_params.get("search")
+        if search:
+            users = users.filter(
+                Q(username__icontains=search) |
+                Q(email__icontains=search) |
+                Q(first_name__icontains=search) |
+                Q(last_name__icontains=search)
+            )
+
+        # Exclude current user
+        users = users.exclude(id=current_user.id)
+
+        serializer = UserSerializer(
+            users,
+            many=True
+        )
+
+        return Response(serializer.data)
+
+    # ======================================================
+    # ALL TEAMS
+    # ======================================================
+
+    @action(
+        detail=False,
+        methods=["get"]
+    )
+    def all_teams(self, request):
+        # ✅ Check if user has permission to view all teams
+        if not self.can_view_team(request.user):
+            return Response(
+                {"error": "You don't have permission to view all teams"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        teams = Team.objects.all().order_by("name")
+
+        serializer = TeamSerializer(
+            teams,
+            many=True
+        )
+
+        return Response({
+            "count": teams.count(),
+            "results": serializer.data
+        })
+
+    # ======================================================
+    # MY LEADING TEAMS
+    # ======================================================
+
+    @action(
+        detail=False,
+        methods=["get"]
+    )
+    def my_leading_teams(self, request):
+        user = request.user
+
+        if not (user.role and user.role.name == "TEAM_LEAD"):
+            return Response(
+                {"error": "You are not a Team Lead"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        teams = Team.objects.filter(lead=user)
+
+        serializer = TeamSerializer(teams, many=True)
+
+        return Response({
+            "count": teams.count(),
+            "results": serializer.data
+        })
