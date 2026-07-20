@@ -4,15 +4,17 @@ from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from django.utils import timezone
+import logging
 
 from ..models import Ticket, TicketHistory
-# ✅ Fix: Import Category from the categories app
 from apps.categories.models import Category
-
 from ..serializers import TicketSerializer
 from ..services.ticket_service import TicketService
 from ..queries.ticket_query import TicketQuery
 from ..builders.ticket_timeline import TicketTimelineBuilder
+
+# Import SMS service
+from apps.notifications.services.ticket_sms_service import TicketSMSService
 
 from .mixins import (
     TicketResolveMixin,
@@ -23,6 +25,8 @@ from .mixins import (
     TicketOverdueMixin,
     TicketAgingMixin,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class TicketViewSet(
@@ -76,8 +80,22 @@ class TicketViewSet(
         })
 
     def create(self, request, *args, **kwargs):
-        """Create a new ticket."""
+        """Create a new ticket and send SMS notification."""
         ticket = TicketService.create_ticket(request)
+        
+        # ============================================================
+        # 📱 SEND SMS WHEN TICKET IS CREATED
+        # ============================================================
+        if ticket.customer and ticket.customer.phone:
+            try:
+                sms_sent = TicketSMSService.send_ticket_created_sms(ticket)
+                if sms_sent:
+                    logger.info(f"✅ SMS sent for ticket {ticket.ticket_number} to {ticket.customer.phone}")
+                else:
+                    logger.warning(f"⚠️ SMS failed for ticket {ticket.ticket_number}")
+            except Exception as e:
+                logger.error(f"❌ Error sending SMS for ticket {ticket.ticket_number}: {str(e)}")
+        
         serializer = self.get_serializer(ticket)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -93,9 +111,30 @@ class TicketViewSet(
         """Update a ticket fully."""
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
+        
+        # Store old status for SMS check
+        old_status = instance.status
+        
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
+        
+        # ============================================================
+        # 📱 SEND SMS WHEN TICKET IS CLOSED
+        # ============================================================
+        if (old_status != instance.status and 
+            instance.status == 'CLOSED' and 
+            instance.customer and 
+            instance.customer.phone):
+            try:
+                sms_sent = TicketSMSService.send_ticket_closed_sms(instance)
+                if sms_sent:
+                    logger.info(f"✅ SMS sent for closed ticket {instance.ticket_number} to {instance.customer.phone}")
+                else:
+                    logger.warning(f"⚠️ SMS failed for closed ticket {instance.ticket_number}")
+            except Exception as e:
+                logger.error(f"❌ Error sending SMS for closed ticket {instance.ticket_number}: {str(e)}")
+        
         return Response(serializer.data)
 
     def destroy(self, request, *args, **kwargs):
@@ -114,7 +153,6 @@ class TicketViewSet(
     @action(detail=True, methods=['post'])
     def restore(self, request, pk=None):
         """Restore a soft-deleted ticket."""
-        # Use all_objects to include soft-deleted records
         ticket = Ticket.all_objects.get(pk=pk)
         if not ticket.is_deleted:
             return Response(
@@ -130,10 +168,8 @@ class TicketViewSet(
     @action(detail=False, methods=['get'])
     def deleted(self, request):
         """List all soft-deleted tickets (admin only)."""
-        # Get user role name safely
         role_name = self._get_user_role(request.user)
 
-        # Allow access if role is ADMIN or user is staff (backup)
         if role_name != "ADMIN" and not request.user.is_staff:
             return Response(
                 {"error": "Permission denied. Only administrators can view deleted tickets."},
@@ -161,25 +197,20 @@ class TicketViewSet(
         ticket = self.get_object()
         category_id = request.data.get('category_id')
         
-        # Validate category_id
         if category_id is None:
             raise ValidationError({"category_id": "This field is required."})
         
-        # Get the category from the categories app
         try:
             category = Category.objects.get(id=category_id)
         except Category.DoesNotExist:
             raise ValidationError({"category_id": f"Category with id {category_id} does not exist."})
         
-        # Store old category for history
         old_category = ticket.category
         old_category_name = old_category.name if old_category else "None"
         
-        # Update the ticket
         ticket.category = category
         ticket.save(update_fields=['category', 'updated_at'])
         
-        # Create history entry
         TicketHistory.objects.create(
             ticket=ticket,
             action="CATEGORY_UPDATED",
@@ -213,7 +244,6 @@ class TicketViewSet(
         if not priority:
             raise ValidationError({"priority": "This field is required."})
         
-        # Validate priority
         valid_priorities = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']
         if priority.upper() not in valid_priorities:
             raise ValidationError({
@@ -221,12 +251,9 @@ class TicketViewSet(
             })
         
         old_priority = ticket.priority
-        
-        # Update the ticket
         ticket.priority = priority.upper()
         ticket.save(update_fields=['priority', 'updated_at'])
         
-        # Create history entry
         TicketHistory.objects.create(
             ticket=ticket,
             action="PRIORITY_UPDATED",
@@ -257,7 +284,6 @@ class TicketViewSet(
         if not status_value:
             raise ValidationError({"status": "This field is required."})
         
-        # Validate status
         valid_statuses = ['OPEN', 'ASSIGNED', 'IN_PROGRESS', 'RESOLVED', 'CLOSED']
         if status_value.upper() not in valid_statuses:
             raise ValidationError({
@@ -265,11 +291,8 @@ class TicketViewSet(
             })
         
         old_status = ticket.status
-        
-        # Update the ticket
         ticket.status = status_value.upper()
         
-        # If resolved, set resolved_at
         if ticket.status == 'RESOLVED' and not ticket.resolved_at:
             ticket.resolved_at = timezone.now()
         elif ticket.status != 'RESOLVED':
@@ -277,7 +300,6 @@ class TicketViewSet(
             
         ticket.save(update_fields=['status', 'resolved_at', 'updated_at'])
         
-        # Create history entry
         TicketHistory.objects.create(
             ticket=ticket,
             action="STATUS_UPDATED",
@@ -288,6 +310,22 @@ class TicketViewSet(
                 "new_status": ticket.status
             }
         )
+
+        # ============================================================
+        # 📱 SEND SMS WHEN TICKET IS CLOSED VIA STATUS UPDATE
+        # ============================================================
+        if (old_status != ticket.status and 
+            ticket.status == 'CLOSED' and 
+            ticket.customer and 
+            ticket.customer.phone):
+            try:
+                sms_sent = TicketSMSService.send_ticket_closed_sms(ticket)
+                if sms_sent:
+                    logger.info(f"✅ SMS sent for closed ticket {ticket.ticket_number} to {ticket.customer.phone}")
+                else:
+                    logger.warning(f"⚠️ SMS failed for closed ticket {ticket.ticket_number}")
+            except Exception as e:
+                logger.error(f"❌ Error sending SMS for closed ticket {ticket.ticket_number}: {str(e)}")
         
         return Response({
             "message": "Status updated successfully",
@@ -307,14 +345,12 @@ class TicketViewSet(
         if not user:
             return None
         
-        # Check role attribute (ForeignKey or CharField)
         if hasattr(user, "role") and user.role:
             if hasattr(user.role, "name"):
                 return user.role.name.upper()
             elif isinstance(user.role, str):
                 return user.role.upper()
         
-        # Check role_name attribute
         if hasattr(user, "role_name") and user.role_name:
             return user.role_name.upper()
         

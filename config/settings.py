@@ -20,7 +20,8 @@ DEBUG = True
 
 ALLOWED_HOSTS = ['*']  # change in production
 
-
+SMS_API_URL = "http://192.168.57.11/kannel/modules/smsapi/outgoing.php"
+SMS_PROJECT = "LORMIS"
 # =========================
 # APPLICATIONS
 # =========================
