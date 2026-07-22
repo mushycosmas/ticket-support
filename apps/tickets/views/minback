@@ -12,14 +12,13 @@ sms_logger = logging.getLogger('sms')
 
 class TicketResolveMixin:
     """
-    Mixin for resolving tickets with SMS notifications.
-    Sends SMS to: Customer, Assigned Agent, Team Lead, Admin
+    Mixin for resolving tickets with SMS notification.
     """
     
     @action(detail=True, methods=['post'])
     def resolve(self, request, pk=None):
         """
-        Resolve a ticket and send SMS notifications.
+        Resolve a ticket and send SMS notification to the customer.
         """
         ticket = self.get_object()
         comment = request.data.get('comment', '')
@@ -38,56 +37,35 @@ class TicketResolveMixin:
             sms_logger.info(f"✅ Ticket {ticket.ticket_number} resolved successfully")
             
             # ============================================================
-            # 📱 SEND SMS NOTIFICATIONS WHEN TICKET IS RESOLVED
+            # 📱 SEND SMS WHEN TICKET IS RESOLVED
             # ============================================================
-            
-            # 1. Send to Customer
-            customer_sms = False
+            sms_sent = False
             if ticket.customer and ticket.customer.phone:
                 try:
-                    sms_logger.info("📱 Sending SMS to customer...")
-                    customer_sms = TicketSMSService.send_ticket_resolved_sms(ticket, comment)
+                    sms_logger.info("📱 Sending SMS notification...")
+                    sms_sent = TicketSMSService.send_ticket_resolved_sms(ticket, comment)
                     
-                    if customer_sms:
-                        sms_logger.info(f"✅ SMS sent to customer {ticket.customer.phone}")
+                    if sms_sent:
+                        sms_logger.info(f"✅ SMS sent successfully to {ticket.customer.phone}")
                     else:
-                        sms_logger.warning(f"⚠️ SMS failed for customer {ticket.customer.phone}")
+                        sms_logger.warning(f"⚠️ SMS failed for {ticket.customer.phone}")
                 except Exception as e:
-                    sms_logger.error(f"❌ Error sending SMS to customer: {str(e)}")
+                    sms_logger.error(f"❌ Error sending SMS: {str(e)}")
             else:
                 sms_logger.info("ℹ️ No customer phone number - SMS not sent")
-            
-            # 2. Send to Staff (Assigned Agent, Team Lead, Admin)
-            staff_sms = False
-            try:
-                sms_logger.info("📱 Sending SMS to staff...")
-                staff_sms = TicketSMSService.send_ticket_resolved_to_staff(ticket, comment)
-                
-                if staff_sms:
-                    sms_logger.info(f"✅ Staff SMS sent successfully")
-                else:
-                    sms_logger.warning("⚠️ Staff SMS failed or no recipients")
-            except Exception as e:
-                sms_logger.error(f"❌ Error sending staff SMS: {str(e)}")
             
             sms_logger.info("=" * 70)
             
             # Return response with SMS status
             serializer = self.get_serializer(ticket)
             response_data = serializer.data
-            response_data['sms_sent'] = {
-                'customer': customer_sms,
-                'staff': staff_sms
-            }
+            response_data['sms_sent'] = sms_sent if ticket.customer and ticket.customer.phone else None
             
             return Response({
                 'success': True,
                 'message': 'Ticket resolved successfully',
                 'data': response_data,
-                'sms_sent': {
-                    'customer': customer_sms,
-                    'staff': staff_sms
-                }
+                'sms_sent': sms_sent if ticket.customer and ticket.customer.phone else None
             })
             
         except ValueError as e:
@@ -108,14 +86,13 @@ class TicketResolveMixin:
 
 class TicketCloseMixin:
     """
-    Mixin for closing tickets with SMS notifications.
-    Sends SMS to: Customer, Assigned Agent, Team Lead, Admin
+    Mixin for closing tickets with SMS notification.
     """
     
     @action(detail=True, methods=['post'])
     def close(self, request, pk=None):
         """
-        Close a ticket and send SMS notifications.
+        Close a ticket and send SMS notification to the customer.
         """
         ticket = self.get_object()
         comment = request.data.get('comment', '')
@@ -134,56 +111,35 @@ class TicketCloseMixin:
             sms_logger.info(f"✅ Ticket {ticket.ticket_number} closed successfully")
             
             # ============================================================
-            # 📱 SEND SMS NOTIFICATIONS WHEN TICKET IS CLOSED
+            # 📱 SEND SMS WHEN TICKET IS CLOSED
             # ============================================================
-            
-            # 1. Send to Customer
-            customer_sms = False
+            sms_sent = False
             if ticket.customer and ticket.customer.phone:
                 try:
-                    sms_logger.info("📱 Sending SMS to customer...")
-                    customer_sms = TicketSMSService.send_ticket_closed_sms(ticket)
+                    sms_logger.info("📱 Sending SMS notification...")
+                    sms_sent = TicketSMSService.send_ticket_closed_sms(ticket)
                     
-                    if customer_sms:
-                        sms_logger.info(f"✅ SMS sent to customer {ticket.customer.phone}")
+                    if sms_sent:
+                        sms_logger.info(f"✅ SMS sent successfully to {ticket.customer.phone}")
                     else:
-                        sms_logger.warning(f"⚠️ SMS failed for customer {ticket.customer.phone}")
+                        sms_logger.warning(f"⚠️ SMS failed for {ticket.customer.phone}")
                 except Exception as e:
-                    sms_logger.error(f"❌ Error sending SMS to customer: {str(e)}")
+                    sms_logger.error(f"❌ Error sending SMS: {str(e)}")
             else:
                 sms_logger.info("ℹ️ No customer phone number - SMS not sent")
-            
-            # 2. Send to Staff (Assigned Agent, Team Lead, Admin)
-            staff_sms = False
-            try:
-                sms_logger.info("📱 Sending SMS to staff...")
-                staff_sms = TicketSMSService.send_ticket_closed_to_staff(ticket)
-                
-                if staff_sms:
-                    sms_logger.info(f"✅ Staff SMS sent successfully")
-                else:
-                    sms_logger.warning("⚠️ Staff SMS failed or no recipients")
-            except Exception as e:
-                sms_logger.error(f"❌ Error sending staff SMS: {str(e)}")
             
             sms_logger.info("=" * 70)
             
             # Return response with SMS status
             serializer = self.get_serializer(ticket)
             response_data = serializer.data
-            response_data['sms_sent'] = {
-                'customer': customer_sms,
-                'staff': staff_sms
-            }
+            response_data['sms_sent'] = sms_sent if ticket.customer and ticket.customer.phone else None
             
             return Response({
                 'success': True,
                 'message': 'Ticket closed successfully',
                 'data': response_data,
-                'sms_sent': {
-                    'customer': customer_sms,
-                    'staff': staff_sms
-                }
+                'sms_sent': sms_sent if ticket.customer and ticket.customer.phone else None
             })
             
         except ValueError as e:
@@ -204,14 +160,13 @@ class TicketCloseMixin:
 
 class TicketReopenMixin:
     """
-    Mixin for reopening tickets with SMS notifications.
-    Sends SMS to: Customer, Assigned Agent, Team Lead, Admin
+    Mixin for reopening tickets with SMS notification.
     """
     
     @action(detail=True, methods=['post'])
     def reopen(self, request, pk=None):
         """
-        Reopen a ticket and send SMS notifications.
+        Reopen a ticket and send SMS notification to the customer.
         """
         ticket = self.get_object()
         comment = request.data.get('comment', '')
@@ -229,56 +184,35 @@ class TicketReopenMixin:
             sms_logger.info(f"✅ Ticket {ticket.ticket_number} reopened successfully")
             
             # ============================================================
-            # 📱 SEND SMS NOTIFICATIONS WHEN TICKET IS REOPENED
+            # 📱 SEND SMS WHEN TICKET IS REOPENED
             # ============================================================
-            
-            # 1. Send to Customer
-            customer_sms = False
+            sms_sent = False
             if ticket.customer and ticket.customer.phone:
                 try:
-                    sms_logger.info("📱 Sending SMS to customer...")
-                    customer_sms = TicketSMSService.send_ticket_reopened_sms(ticket)
+                    sms_logger.info("📱 Sending SMS notification...")
+                    sms_sent = TicketSMSService.send_ticket_reopened_sms(ticket)
                     
-                    if customer_sms:
-                        sms_logger.info(f"✅ SMS sent to customer {ticket.customer.phone}")
+                    if sms_sent:
+                        sms_logger.info(f"✅ SMS sent successfully to {ticket.customer.phone}")
                     else:
-                        sms_logger.warning(f"⚠️ SMS failed for customer {ticket.customer.phone}")
+                        sms_logger.warning(f"⚠️ SMS failed for {ticket.customer.phone}")
                 except Exception as e:
-                    sms_logger.error(f"❌ Error sending SMS to customer: {str(e)}")
+                    sms_logger.error(f"❌ Error sending SMS: {str(e)}")
             else:
                 sms_logger.info("ℹ️ No customer phone number - SMS not sent")
-            
-            # 2. Send to Staff (Assigned Agent, Team Lead, Admin)
-            staff_sms = False
-            try:
-                sms_logger.info("📱 Sending SMS to staff...")
-                staff_sms = TicketSMSService.send_ticket_created_to_staff(ticket)
-                
-                if staff_sms:
-                    sms_logger.info(f"✅ Staff SMS sent successfully")
-                else:
-                    sms_logger.warning("⚠️ Staff SMS failed or no recipients")
-            except Exception as e:
-                sms_logger.error(f"❌ Error sending staff SMS: {str(e)}")
             
             sms_logger.info("=" * 70)
             
             # Return response with SMS status
             serializer = self.get_serializer(ticket)
             response_data = serializer.data
-            response_data['sms_sent'] = {
-                'customer': customer_sms,
-                'staff': staff_sms
-            }
+            response_data['sms_sent'] = sms_sent if ticket.customer and ticket.customer.phone else None
             
             return Response({
                 'success': True,
                 'message': 'Ticket reopened successfully',
                 'data': response_data,
-                'sms_sent': {
-                    'customer': customer_sms,
-                    'staff': staff_sms
-                }
+                'sms_sent': sms_sent if ticket.customer and ticket.customer.phone else None
             })
             
         except ValueError as e:
@@ -296,14 +230,13 @@ class TicketReopenMixin:
 
 class TicketAssignMixin:
     """
-    Mixin for assigning tickets with SMS notifications.
-    Sends SMS to: Customer, Assigned Agent, Team Lead, Admin
+    Mixin for assigning tickets with optional SMS notification.
     """
     
     @action(detail=True, methods=['post'])
     def assign(self, request, pk=None):
         """
-        Assign a ticket to an agent and send SMS notifications.
+        Assign a ticket to an agent.
         """
         ticket = self.get_object()
         
@@ -316,60 +249,38 @@ class TicketAssignMixin:
         
         try:
             ticket = TicketService.assign(ticket, request)
-            assigned_to_name = ticket.assigned_to.get_full_name() if ticket.assigned_to else 'N/A'
-            sms_logger.info(f"✅ Ticket {ticket.ticket_number} assigned to {assigned_to_name}")
+            sms_logger.info(f"✅ Ticket {ticket.ticket_number} assigned to {ticket.assigned_to.get_full_name() if ticket.assigned_to else 'N/A'}")
             
             # ============================================================
-            # 📱 SEND SMS NOTIFICATIONS WHEN TICKET IS ASSIGNED
+            # 📱 SEND SMS WHEN TICKET IS ASSIGNED (Optional)
             # ============================================================
-            
-            # 1. Send to Customer
-            customer_sms = False
+            sms_sent = False
             if ticket.customer and ticket.customer.phone and ticket.assigned_to:
                 try:
-                    sms_logger.info("📱 Sending SMS to customer...")
-                    customer_sms = TicketSMSService.send_ticket_assigned_sms(ticket)
+                    sms_logger.info("📱 Sending SMS notification...")
+                    sms_sent = TicketSMSService.send_ticket_assigned_sms(ticket)
                     
-                    if customer_sms:
-                        sms_logger.info(f"✅ SMS sent to customer {ticket.customer.phone}")
+                    if sms_sent:
+                        sms_logger.info(f"✅ SMS sent successfully to {ticket.customer.phone}")
                     else:
-                        sms_logger.warning(f"⚠️ SMS failed for customer {ticket.customer.phone}")
+                        sms_logger.warning(f"⚠️ SMS failed for {ticket.customer.phone}")
                 except Exception as e:
-                    sms_logger.error(f"❌ Error sending SMS to customer: {str(e)}")
+                    sms_logger.error(f"❌ Error sending SMS: {str(e)}")
             else:
                 sms_logger.info("ℹ️ No customer phone or assigned agent - SMS not sent")
-            
-            # 2. Send to Staff (Assigned Agent, Team Lead, Admin)
-            staff_sms = False
-            try:
-                sms_logger.info("📱 Sending SMS to staff...")
-                staff_sms = TicketSMSService.send_ticket_assigned_to_staff(ticket)
-                
-                if staff_sms:
-                    sms_logger.info(f"✅ Staff SMS sent successfully")
-                else:
-                    sms_logger.warning("⚠️ Staff SMS failed or no recipients")
-            except Exception as e:
-                sms_logger.error(f"❌ Error sending staff SMS: {str(e)}")
             
             sms_logger.info("=" * 70)
             
             # Return response with SMS status
             serializer = self.get_serializer(ticket)
             response_data = serializer.data
-            response_data['sms_sent'] = {
-                'customer': customer_sms,
-                'staff': staff_sms
-            }
+            response_data['sms_sent'] = sms_sent if ticket.customer and ticket.customer.phone and ticket.assigned_to else None
             
             return Response({
                 'success': True,
                 'message': 'Ticket assigned successfully',
                 'data': response_data,
-                'sms_sent': {
-                    'customer': customer_sms,
-                    'staff': staff_sms
-                }
+                'sms_sent': sms_sent if ticket.customer and ticket.customer.phone and ticket.assigned_to else None
             })
             
         except ValueError as e:

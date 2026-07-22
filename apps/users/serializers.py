@@ -1,5 +1,3 @@
-# apps/users/serializers.py
-
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
@@ -36,6 +34,7 @@ class UserSerializer(serializers.ModelSerializer):
             "last_name",
             "full_name",
             "rank",
+            "phone",
             "profile_picture",
             "role",
             "role_name",
@@ -523,3 +522,88 @@ class TeamLeadsSerializer(serializers.Serializer):
             )
         
         return data
+
+
+# ============================================================
+# 📱 UPDATE PHONE SERIALIZER
+# ============================================================
+class UpdatePhoneSerializer(serializers.Serializer):
+    """
+    Serializer for updating user's phone number.
+    Validates Tanzania phone number format.
+    """
+    phone = serializers.CharField(required=True, max_length=20)
+
+    def validate_phone(self, value):
+        """
+        Validate phone number format:
+        - Must start with 255
+        - Must be exactly 12 digits
+        - Remove all non-digit characters
+        """
+        import re
+        cleaned = re.sub(r'\D', '', value)
+        
+        if not cleaned:
+            raise serializers.ValidationError("Phone number is required")
+        
+        # Check if it starts with 255
+        if not cleaned.startswith('255'):
+            raise serializers.ValidationError(
+                "Phone number must start with 255 (Tanzania country code)"
+            )
+        
+        # Check length (must be exactly 12 digits)
+        if len(cleaned) != 12:
+            raise serializers.ValidationError(
+                f"Phone number must be exactly 12 digits (current: {len(cleaned)})"
+            )
+        
+        return cleaned
+
+    def update(self, instance, validated_data):
+        """Update user's phone number"""
+        instance.phone = validated_data['phone']
+        instance.save()
+        return instance
+
+
+# ============================================================
+# 📱 USER PROFILE UPDATE SERIALIZER
+# ============================================================
+class UserProfileUpdateSerializer(serializers.ModelSerializer):
+    """
+    Serializer for updating user profile (phone, name, email)
+    """
+    class Meta:
+        model = User
+        fields = ['phone', 'first_name', 'last_name', 'email']
+        extra_kwargs = {
+            'phone': {'required': False, 'allow_blank': True, 'allow_null': True},
+            'first_name': {'required': False, 'allow_blank': True},
+            'last_name': {'required': False, 'allow_blank': True},
+            'email': {'required': False, 'allow_blank': True},
+        }
+
+    def validate_phone(self, value):
+        """Validate phone number if provided"""
+        if not value:
+            return value
+        
+        import re
+        cleaned = re.sub(r'\D', '', value)
+        
+        if not cleaned:
+            return value
+        
+        if not cleaned.startswith('255'):
+            raise serializers.ValidationError(
+                "Phone number must start with 255 (Tanzania country code)"
+            )
+        
+        if len(cleaned) != 12:
+            raise serializers.ValidationError(
+                f"Phone number must be exactly 12 digits (current: {len(cleaned)})"
+            )
+        
+        return cleaned

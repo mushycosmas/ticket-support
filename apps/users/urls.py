@@ -26,4 +26,6 @@ urlpatterns = [
     path('refresh/', RefreshTokenView.as_view(), name='refresh-token'),
     path('logout/', LogoutView.as_view(), name='logout'),
     path('verify-token/', VerifyTokenView.as_view(), name='verify-token'),
+    path('users/update-phone/', UserViewSet.as_view({'patch': 'update_phone'}), name='user-update-phone'),
+
 ]

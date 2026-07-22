@@ -104,6 +104,7 @@ def build_user_data(user):
         "id": user.id,
         "username": user.username,
         "email": user.email,
+        "phone":user.phone,
         "first_name": user.first_name,
         "last_name": user.last_name,
         "full_name": user.get_full_name() or user.username,
