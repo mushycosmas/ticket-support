@@ -1,11 +1,15 @@
+# apps/tickets/services/ticket_service.py
+
 import uuid
 from django.utils import timezone
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.db.utils import IntegrityError
 from rest_framework.exceptions import ValidationError, PermissionDenied
 
 from ..models import Ticket, Customer, TicketHistory
 from apps.users.models import Team
+from apps.channels.models import Channel  
 
 User = get_user_model()
 
@@ -13,6 +17,7 @@ User = get_user_model()
 # CONSTANTS
 # =========================
 ALLOWED_ASSIGNEE_ROLES = ["AGENT", "SUPPORT", "ADMIN", "TEAM_LEAD"]
+WORKER_ROLES = ["AGENT", "SUPPORT", "TEAM_LEAD"]
 
 
 # =========================
@@ -23,16 +28,20 @@ class TicketWorkflow:
 
     @staticmethod
     def assign(ticket, user):
-        # No status check – allow assignment anytime
         ticket.status = "ASSIGNED"
         ticket.assigned_to = user
         ticket.save()
         return ticket
 
     @staticmethod
-    def start_progress(ticket):
-        if ticket.status != "ASSIGNED":
+    def start_progress(ticket, user=None):
+        """
+        Start progress on a ticket.
+        Can be called by assigned agent, support, team lead, or admin.
+        """
+        if ticket.status not in ("ASSIGNED", "OPEN"):
             raise ValueError(f"Cannot start progress from status '{ticket.status}'")
+        
         ticket.status = "IN_PROGRESS"
         ticket.save()
         return ticket
@@ -68,7 +77,15 @@ class TicketWorkflow:
 # SERVICE LAYER (business logic)
 # =========================
 class TicketService:
-    """Handles all ticket operations and delegates state changes to workflow."""
+    """
+    Handles all ticket operations with proper channel → team → team lead flow.
+    
+    Flow: Channel → Team → Team Lead → Ticket Owner
+    - Channel determines the team
+    - Team lead is auto-assigned
+    - AGENTS and SUPPORT are manually assigned
+    - When assigned to ANY member, status becomes IN_PROGRESS
+    """
 
     @staticmethod
     def safe_int(value):
@@ -107,29 +124,151 @@ class TicketService:
         role = TicketService._get_user_role(user)
         return role == "TEAM_LEAD"
 
+    @staticmethod
+    def _is_worker(user):
+        """Check if user is a worker (AGENT or SUPPORT or TEAM_LEAD)."""
+        role = TicketService._get_user_role(user)
+        return role in WORKER_ROLES
+
+    @staticmethod
+    def _is_assignable(user):
+        """Check if user can be assigned to a ticket."""
+        role = TicketService._get_user_role(user)
+        return role in ALLOWED_ASSIGNEE_ROLES
+
+    @staticmethod
+    def _get_team_lead(team):
+        """
+        Get the team lead for a given team.
+        ✅ FIXED: Uses the many-to-many relationship correctly.
+        """
+        if not team:
+            return None
+        
+        # ✅ FIX: Use the correct relationship - teams is a many-to-many field
+        # Find users who are members of this team AND have TEAM_LEAD role
+        team_lead = User.objects.filter(
+            teams=team,  # ✅ Correct: many-to-many relationship
+            role__name="TEAM_LEAD"
+        ).first()
+        
+        # If no team lead found, try to find any user with TEAM_LEAD role
+        if not team_lead:
+            team_lead = User.objects.filter(
+                teams=team,
+                role_name="TEAM_LEAD"
+            ).first()
+        
+        return team_lead
+
+    @staticmethod
+    def _get_team_from_channel(channel_id):
+        """
+        Get the team from a channel.
+        Returns (team_id, team_lead) tuple.
+        """
+        team_id = None
+        team_lead = None
+        
+        if channel_id:
+            try:
+                channel = Channel.objects.select_related('team').get(id=channel_id)
+                if channel.team_id:
+                    team_id = channel.team_id
+                    team_lead = TicketService._get_team_lead(channel.team)
+            except Channel.DoesNotExist:
+                pass
+        
+        return team_id, team_lead
+
+    @staticmethod
+    def _get_or_create_customer(data, request_user_id):
+        """
+        Get or create a customer from the request data.
+        Handles duplicate NIDA numbers gracefully.
+        """
+        email = data.get("customer_email")
+        phone = data.get("customer_phone")
+        name = data.get("customer_name")
+        nida_number = data.get("customer_nida")
+        gender = data.get("customer_gender")
+        
+        customer = None
+        created = False
+        
+        # If no identifying info, return None
+        if not any([email, phone, nida_number]):
+            return None, False
+        
+        try:
+            # Try to get or create customer
+            customer, created = Customer.get_or_create_customer(
+                email=email,
+                phone=phone,
+                full_name=name,
+                nida_number=nida_number,
+                gender=gender,
+                created_by_id=request_user_id,
+            )
+            return customer, created
+            
+        except IntegrityError as e:
+            # Handle duplicate NIDA number error
+            if "Duplicate entry" in str(e) and "nida_number" in str(e):
+                # Find existing customer with this NIDA
+                if nida_number:
+                    customer = Customer.objects.filter(nida_number=nida_number).first()
+                    if customer:
+                        # Update existing customer with new info
+                        if email and not customer.email:
+                            customer.email = email
+                        if phone and not customer.phone:
+                            customer.phone = phone
+                        if name and name != 'Unknown' and not customer.full_name:
+                            customer.full_name = name
+                        if gender and not customer.gender:
+                            customer.gender = gender
+                        customer.save(update_fields=['email', 'phone', 'full_name', 'gender'])
+                        return customer, False
+                
+                # If we couldn't find by NIDA, try by email or phone
+                if email:
+                    customer = Customer.objects.filter(email=email).first()
+                    if customer:
+                        return customer, False
+                if phone:
+                    customer = Customer.objects.filter(phone=phone).first()
+                    if customer:
+                        return customer, False
+            
+            # Re-raise other integrity errors
+            raise e
+        
+        except Exception as e:
+            print(f"❌ Customer error: {e}")
+            # Try to find existing customer by email or phone
+            if email:
+                customer = Customer.objects.filter(email=email).first()
+                if customer:
+                    return customer, False
+            if phone:
+                customer = Customer.objects.filter(phone=phone).first()
+                if customer:
+                    return customer, False
+            raise e
+
     # ---------- CREATE ----------
     @staticmethod
     @transaction.atomic
     def create_ticket(request):
+        """Create a new ticket with automatic team and team lead assignment."""
         data = request.data
+        request_user_id = request.user.id if request.user.is_authenticated else None
 
-        # Customer handling
-        email = data.get("customer_email")
-        phone = data.get("customer_phone")
-        name = data.get("customer_name")
+        # ----- Customer handling with duplicate protection -----
+        customer, customer_created = TicketService._get_or_create_customer(data, request_user_id)
 
-        customer = None
-        if email or phone:
-            customer, _ = Customer.get_or_create_customer(
-                email=email,
-                phone=phone,
-                full_name=name,
-                nida_number=data.get("customer_nida"),
-                gender=data.get("customer_gender"),
-                created_by_id=request.user.id if request.user.is_authenticated else None,
-            )
-
-        # Foreign keys
+        # ----- Foreign keys -----
         category_id = TicketService.safe_int(data.get("category_id") or data.get("category"))
         channel_id = TicketService.safe_int(data.get("channel_id") or data.get("channel"))
         street_id = TicketService.safe_int(data.get("street_id"))
@@ -138,237 +277,447 @@ class TicketService:
         assigned_by_id = TicketService.safe_int(data.get("assigned_by"))
         template_id = TicketService.safe_int(data.get("template"))
 
-        # Create ticket
+        # ----- FLOW: Channel → Team → Team Lead -----
+        final_team_id = team_id
+        team_lead = None
+        
+        if channel_id:
+            channel_team_id, channel_team_lead = TicketService._get_team_from_channel(channel_id)
+            if channel_team_id:
+                final_team_id = channel_team_id
+                team_lead = channel_team_lead
+        
+        if not team_lead and final_team_id:
+            try:
+                team = Team.objects.get(id=final_team_id)
+                team_lead = TicketService._get_team_lead(team)
+            except Team.DoesNotExist:
+                pass
+
+        # ✅ Determine initial status
+        # If assigned to ANY member (Team Lead, Agent, Support), set to IN_PROGRESS
+        initial_status = "OPEN"
+        
+        # Check if assigned_to is provided
+        if assigned_to_id:
+            assigned_user = User.objects.filter(id=assigned_to_id).first()
+            if assigned_user and TicketService._is_assignable(assigned_user):
+                initial_status = "IN_PROGRESS"
+        elif team_lead:
+            # If auto-assigned to team lead
+            initial_status = "IN_PROGRESS"
+
+        # ----- Create ticket -----
         ticket = Ticket.objects.create(
             ticket_number=f"TKT-{uuid.uuid4().hex[:8].upper()}",
             title=data.get("title"),
             description=data.get("description", ""),
             priority=data.get("priority", "MEDIUM"),
-            status="OPEN",
+            status=initial_status,  # ✅ Set correct initial status
             category_id=category_id,
             channel_id=channel_id,
             street_id=street_id,
             customer=customer,
             template_id=template_id,
+            team_id=final_team_id,
+            assigned_to=team_lead if team_lead else None,
         )
 
-        # Assign relationships
-        TicketService._assign_relationships(ticket, assigned_to_id, assigned_by_id, team_id, request)
-
-        # History (with metadata)
-        TicketHistory.objects.create(
-            ticket=ticket,
-            action="CREATED",
-            created_by=request.user if request.user.is_authenticated else None,
-            metadata={
-                "title": ticket.title,
-                "description": ticket.description,
-                "street_id": street_id,
-                "assigned_to": assigned_to_id,
-                "assigned_by": assigned_by_id,
-                "team_id": team_id,
-                "template_id": template_id,
-            }
-        )
-
-        return ticket
-
-    @staticmethod
-    def _assign_relationships(ticket, assigned_to_id, assigned_by_id, team_id, request):
+        # ----- Override assigned_to if explicitly provided -----
         if assigned_to_id:
             user = User.objects.filter(id=assigned_to_id).first()
             if user:
                 ticket.assigned_to = user
-                ticket.status = "IN_PROGRESS"
+                # ✅ If assigned to any assignable user, set to IN_PROGRESS
+                if TicketService._is_assignable(user):
+                    ticket.status = "IN_PROGRESS"
+        
+        # ----- Set assigned_by -----
         if assigned_by_id:
             by_user = User.objects.filter(id=assigned_by_id).first()
             if by_user:
                 ticket.assigned_by = by_user
         elif request.user.is_authenticated:
             ticket.assigned_by = request.user
-        if team_id:
-            ticket.team_id = team_id
-        ticket.save(update_fields=["assigned_to", "assigned_by", "team_id", "status"])
 
-    # ---------- STATE CHANGES (with comment support) ----------
-    @staticmethod
-    def resolve(ticket, request, comment=""):
-        old_status = ticket.status
-        try:
-            ticket = TicketWorkflow.resolve(ticket)
-        except ValueError as e:
-            raise ValueError(str(e))
+        ticket.save()
+
+        # ----- Create history entry -----
         TicketHistory.objects.create(
             ticket=ticket,
-            action="RESOLVED",
-            comment=comment,
-            old_status=old_status,
-            new_status=ticket.status,
+            action="CREATED",
+            comment=f"Ticket created with status: {ticket.status}",
             created_by=request.user if request.user.is_authenticated else None,
-            metadata={"comment": comment}
+            metadata={
+                "title": ticket.title,
+                "description": ticket.description[:100] if ticket.description else "",
+                "street_id": street_id,
+                "channel_id": channel_id,
+                "team_id": final_team_id,
+                "team_lead_id": team_lead.id if team_lead else None,
+                "assigned_to": assigned_to_id,
+                "assigned_by": assigned_by_id,
+                "template_id": template_id,
+                "customer_id": customer.id if customer else None,
+                "customer_created": customer_created,
+                "initial_status": initial_status,
+                "auto_assigned_from_channel": bool(channel_id and final_team_id),
+            }
         )
+
         return ticket
 
-    @staticmethod
-    def close(ticket, request, comment=""):
-        old_status = ticket.status
-        ticket = TicketWorkflow.close(ticket)
-        TicketHistory.objects.create(
-            ticket=ticket,
-            action="CLOSED",
-            comment=comment,
-            old_status=old_status,
-            new_status=ticket.status,
-            created_by=request.user if request.user.is_authenticated else None,
-            metadata={"comment": comment}
-        )
-        return ticket
-
-    @staticmethod
-    def reopen(ticket, request, comment=""):
-        old_status = ticket.status
-        try:
-            ticket = TicketWorkflow.reopen(ticket)
-        except ValueError as e:
-            raise ValueError(str(e))
-        TicketHistory.objects.create(
-            ticket=ticket,
-            action="REOPENED",
-            comment=comment,
-            old_status=old_status,
-            new_status=ticket.status,
-            created_by=request.user if request.user.is_authenticated else None,
-            metadata={"comment": comment}
-        )
-        return ticket
-
-    # ---------- ASSIGN (supports both agent and team - keeps both) ----------
+    # ---------- UNIFIED ASSIGN ----------
     @staticmethod
     def assign(ticket, request):
+        """
+        Unified assign method that handles both agent/support and team assignment.
+        """
         assign_type = request.data.get("type")
         obj_id = request.data.get("id")
 
         if not assign_type or not obj_id:
             raise ValidationError("type and id are required")
 
-        old_team = ticket.team
-        old_assignee = ticket.assigned_to
+        if assign_type == "agent":
+            return TicketService.assign_worker(ticket, request)
+        elif assign_type == "team":
+            return TicketService.change_team(ticket, request)
+        else:
+            raise ValidationError("Invalid type. Use 'agent' or 'team'")
+
+    # ---------- ASSIGN WORKER (AGENT or SUPPORT) ----------
+    @staticmethod
+    def assign_worker(ticket, request):
+        """
+        Assign an agent or support staff to the ticket manually.
+        When assigned to ANY member, status becomes IN_PROGRESS.
+        """
+        worker_id = request.data.get("id") or request.data.get("agent_id")
+        
+        if not worker_id:
+            raise ValidationError("worker_id is required")
+
         requesting_user = request.user if request.user.is_authenticated else None
         is_admin = TicketService._is_admin(requesting_user)
         is_team_lead = TicketService._is_team_lead(requesting_user)
 
-        # ======================
-        # TEAM ASSIGNMENT
-        # ======================
-        if assign_type == "team":
-            try:
-                team = Team.objects.get(id=obj_id)
-            except Team.DoesNotExist:
-                raise ValidationError("Team not found")
+        try:
+            worker = User.objects.get(id=worker_id)
+        except User.DoesNotExist:
+            raise ValidationError("User not found")
 
-            # Check permissions for non-admins
-            if not is_admin and not is_team_lead:
-                raise PermissionDenied("Only admins and team leads can assign to teams")
+        # Get worker's role
+        role_name = TicketService._get_user_role(worker)
+        is_assignable = TicketService._is_assignable(worker)
 
-            # ✅ KEEP existing agent assignment - DO NOT clear assigned_to
-            ticket.team = team
-            # DO NOT: ticket.assigned_to = None  ← Keep the agent!
-            ticket.assigned_by = requesting_user
-            ticket.status = "ASSIGNED"
-            ticket.save()
+        # Allow admin to assign to anyone, restrict others to assignable roles
+        if not is_admin and not is_assignable:
+            allowed_roles_display = ", ".join(role.lower() for role in ALLOWED_ASSIGNEE_ROLES)
+            raise ValidationError(f"Only {allowed_roles_display} can be assigned")
 
-            # History (FULL TRACE)
-            assigned_to_info = f" (with assignee {old_assignee})" if old_assignee else ""
-            TicketHistory.objects.create(
-                ticket=ticket,
-                action="ASSIGNED",
-                comment=f"Assigned to team {team.name}{assigned_to_info}",
-                old_team=old_team,
-                new_team=team,
-                old_assignee=old_assignee,
-                new_assignee=old_assignee,  # Keep the same assignee
-                created_by=requesting_user,
-                metadata={
-                    "type": "team",
-                    "team_id": team.id,
-                    "assigned_by_admin": is_admin,
-                    "assigned_by_team_lead": is_team_lead,
-                    "assignee_kept": old_assignee.id if old_assignee else None
-                }
-            )
-
-            return ticket
-
-        # ======================
-        # AGENT/SUPPORT ASSIGNMENT
-        # ======================
-        if assign_type == "agent":
-            try:
-                agent = User.objects.get(id=obj_id)
-            except User.DoesNotExist:
-                raise ValidationError("User not found")
-
-            # Get agent's role
-            role_name = TicketService._get_user_role(agent)
-
-            # Allow admin to assign to anyone, but restrict others to allowed roles
-            if not is_admin and role_name not in ALLOWED_ASSIGNEE_ROLES:
-                allowed_roles_display = ", ".join(role.lower() for role in ALLOWED_ASSIGNEE_ROLES)
-                raise ValidationError(f"Only {allowed_roles_display} can be assigned")
-
-            # Additional validation for non-admins
-            if not is_admin:
-                # Check if agent is active
-                if not agent.is_active:
-                    raise ValidationError("Cannot assign to inactive user")
-                
-                # Team leads can only assign agents from their team
-                if is_team_lead:
-                    if agent.team_id != requesting_user.team_id:
-                        raise ValidationError("You can only assign agents from your team")
-
-            # ✅ KEEP existing team assignment - DO NOT clear team
-            ticket.assigned_to = agent
-            # DO NOT: ticket.team = None  ← Keep the team!
-            ticket.assigned_by = requesting_user
-            ticket.status = "ASSIGNED"
-            ticket.save()
-
-            # History (FULL TRACE)
-            team_info = f" (with team {old_team})" if old_team else ""
-            comment = f"Assigned to {role_name.lower()} {agent.get_full_name() or agent.username}{team_info}"
-            if is_admin:
-                comment += " (admin override)"
+        # Additional validation for non-admins
+        if not is_admin:
+            if not worker.is_active:
+                raise ValidationError("Cannot assign to inactive user")
             
-            TicketHistory.objects.create(
-                ticket=ticket,
-                action="ASSIGNED",
-                comment=comment,
-                old_team=old_team,
-                new_team=old_team,  # Keep the same team
-                old_assignee=old_assignee,
-                new_assignee=agent,
-                created_by=requesting_user,
-                metadata={
-                    "type": "agent",
-                    "agent_id": agent.id,
-                    "role": role_name,
-                    "assigned_by_admin": is_admin,
-                    "assigned_by_team_lead": is_team_lead,
-                    "team_kept": old_team.id if old_team else None
-                }
+            # ✅ FIX: Use many-to-many relationship for team check
+            if is_team_lead:
+                # Check if worker is in the same team as the team lead
+                user_team_ids = requesting_user.teams.values_list('id', flat=True)
+                worker_team_ids = worker.teams.values_list('id', flat=True)
+                
+                # Check if they share at least one team
+                if not set(user_team_ids).intersection(set(worker_team_ids)):
+                    raise ValidationError("You can only assign workers from your team")
+
+        old_assignee = ticket.assigned_to
+        old_team = ticket.team
+        old_status = ticket.status
+
+        # Assign the worker
+        ticket.assigned_to = worker
+        ticket.assigned_by = requesting_user
+        
+        # ✅ ANY assigned member -> IN_PROGRESS
+        ticket.status = "IN_PROGRESS"
+        
+        ticket.save()
+
+        # Create history entry
+        role_display = role_name.lower()
+        comment = f"Assigned to {role_display} {worker.get_full_name() or worker.username}"
+        if is_admin:
+            comment += " (admin override)"
+        elif is_team_lead and worker.id == requesting_user.id:
+            comment += " (self-assigned by team lead)"
+        
+        # Add status change info
+        if old_status != ticket.status:
+            comment += f" (status changed from {old_status} to {ticket.status})"
+        
+        TicketHistory.objects.create(
+            ticket=ticket,
+            action="ASSIGNED",
+            comment=comment,
+            old_assignee=old_assignee,
+            new_assignee=worker,
+            old_team=old_team,
+            new_team=old_team,
+            old_status=old_status,
+            new_status=ticket.status,
+            created_by=requesting_user,
+            metadata={
+                "worker_id": worker.id,
+                "role": role_name,
+                "assigned_by_admin": is_admin,
+                "assigned_by_team_lead": is_team_lead,
+                "team_id": ticket.team_id,
+                "self_assigned": worker.id == requesting_user.id,
+                "status_changed": old_status != ticket.status,
+            }
+        )
+
+        return ticket
+
+    # ---------- CHANGE TEAM (Admin only) ----------
+    @staticmethod
+    def change_team(ticket, request):
+        """
+        Change the team for a ticket.
+        Only admins can do this.
+        """
+        team_id = request.data.get("id") or request.data.get("team_id")
+        
+        if not team_id:
+            raise ValidationError("team_id is required")
+
+        requesting_user = request.user if request.user.is_authenticated else None
+        is_admin = TicketService._is_admin(requesting_user)
+
+        if not is_admin:
+            raise PermissionDenied("Only admins can change team assignment")
+
+        try:
+            new_team = Team.objects.get(id=team_id)
+        except Team.DoesNotExist:
+            raise ValidationError("Team not found")
+
+        old_team = ticket.team
+        old_assignee = ticket.assigned_to
+        old_status = ticket.status
+
+        ticket.team = new_team
+        ticket.assigned_by = requesting_user
+        ticket.save()
+
+        # Get new team lead
+        new_team_lead = TicketService._get_team_lead(new_team)
+        
+        if new_team_lead:
+            ticket.assigned_to = new_team_lead
+            # ✅ Team lead assigned -> IN_PROGRESS
+            ticket.status = "IN_PROGRESS"
+            ticket.save()
+            new_assignee = new_team_lead
+        else:
+            # No team lead, keep old assignee
+            new_assignee = old_assignee
+
+        TicketHistory.objects.create(
+            ticket=ticket,
+            action="TEAM_CHANGED",
+            comment=f"Team changed from {old_team.name if old_team else 'None'} to {new_team.name}",
+            old_team=old_team,
+            new_team=new_team,
+            old_assignee=old_assignee,
+            new_assignee=new_assignee,
+            old_status=old_status,
+            new_status=ticket.status,
+            created_by=requesting_user,
+            metadata={
+                "old_team_id": old_team.id if old_team else None,
+                "new_team_id": new_team.id,
+                "team_lead_auto_assigned": bool(new_team_lead),
+                "status_changed": old_status != ticket.status,
+            }
+        )
+
+        return ticket
+
+    # ---------- START PROGRESS ----------
+    @staticmethod
+    def start_progress(ticket, request):
+        """
+        Start progress on a ticket.
+        Can be performed by:
+        - Assigned AGENT or SUPPORT
+        - Team Lead of the ticket's team
+        - Admin
+        """
+        user = request.user if request.user.is_authenticated else None
+        
+        if not user:
+            raise PermissionDenied("Authentication required")
+        
+        # Check if user has permission to start progress
+        is_admin = TicketService._is_admin(user)
+        is_team_lead = TicketService._is_team_lead(user)
+        is_assigned_worker = ticket.assigned_to and ticket.assigned_to.id == user.id
+        
+        # ✅ FIX: Check if team lead belongs to the ticket's team
+        is_team_lead_of_ticket = False
+        if is_team_lead and ticket.team_id:
+            # Check if user is a member of the ticket's team
+            is_team_lead_of_ticket = user.teams.filter(id=ticket.team_id).exists()
+        
+        # Allow if: Admin OR Assigned Worker (AGENT/SUPPORT) OR Team Lead of the ticket's team
+        if not (is_admin or is_assigned_worker or is_team_lead_of_ticket):
+            raise PermissionDenied(
+                "You don't have permission to start progress on this ticket. "
+                "Only the assigned agent/support, team lead, or admin can do this."
             )
+        
+        old_status = ticket.status
+        
+        try:
+            ticket = TicketWorkflow.start_progress(ticket, user)
+        except ValueError as e:
+            raise ValueError(str(e))
+        
+        TicketHistory.objects.create(
+            ticket=ticket,
+            action="STARTED_PROGRESS",
+            comment=f"Started progress by {user.get_full_name() or user.username}",
+            old_status=old_status,
+            new_status=ticket.status,
+            created_by=user,
+            metadata={
+                "user_id": user.id,
+                "user_role": TicketService._get_user_role(user),
+                "assigned_to": ticket.assigned_to.id if ticket.assigned_to else None,
+            }
+        )
+        
+        return ticket
 
-            return ticket
+    # ---------- RESOLVE ----------
+    @staticmethod
+    def resolve(ticket, request, comment=""):
+        """Resolve a ticket."""
+        user = request.user if request.user.is_authenticated else None
+        
+        # Check permission to resolve
+        is_admin = TicketService._is_admin(user)
+        is_assigned_worker = ticket.assigned_to and ticket.assigned_to.id == user.id
+        
+        # ✅ FIX: Check if team lead belongs to the ticket's team
+        is_team_lead_of_ticket = False
+        if user and ticket.team_id:
+            is_team_lead_of_ticket = user.teams.filter(id=ticket.team_id).exists()
+        
+        if not (is_admin or is_assigned_worker or is_team_lead_of_ticket):
+            raise PermissionDenied(
+                "You don't have permission to resolve this ticket. "
+                "Only the assigned agent/support, team lead, or admin can do this."
+            )
+        
+        old_status = ticket.status
+        try:
+            ticket = TicketWorkflow.resolve(ticket)
+        except ValueError as e:
+            raise ValueError(str(e))
+        
+        TicketHistory.objects.create(
+            ticket=ticket,
+            action="RESOLVED",
+            comment=comment,
+            old_status=old_status,
+            new_status=ticket.status,
+            created_by=user,
+            metadata={"comment": comment}
+        )
+        return ticket
 
-        raise ValidationError("Invalid type. Use 'agent' or 'team'")
+    # ---------- CLOSE ----------
+    @staticmethod
+    def close(ticket, request, comment=""):
+        """Close a ticket."""
+        user = request.user if request.user.is_authenticated else None
+        
+        is_admin = TicketService._is_admin(user)
+        is_assigned_worker = ticket.assigned_to and ticket.assigned_to.id == user.id
+        
+        # ✅ FIX: Check if team lead belongs to the ticket's team
+        is_team_lead_of_ticket = False
+        if user and ticket.team_id:
+            is_team_lead_of_ticket = user.teams.filter(id=ticket.team_id).exists()
+        
+        if not (is_admin or is_assigned_worker or is_team_lead_of_ticket):
+            raise PermissionDenied(
+                "You don't have permission to close this ticket. "
+                "Only the assigned agent/support, team lead, or admin can do this."
+            )
+        
+        old_status = ticket.status
+        ticket = TicketWorkflow.close(ticket)
+        
+        TicketHistory.objects.create(
+            ticket=ticket,
+            action="CLOSED",
+            comment=comment,
+            old_status=old_status,
+            new_status=ticket.status,
+            created_by=user,
+            metadata={"comment": comment}
+        )
+        return ticket
+
+    # ---------- REOPEN ----------
+    @staticmethod
+    def reopen(ticket, request, comment=""):
+        """Reopen a closed or resolved ticket."""
+        user = request.user if request.user.is_authenticated else None
+        
+        is_admin = TicketService._is_admin(user)
+        is_assigned_worker = ticket.assigned_to and ticket.assigned_to.id == user.id
+        
+        # ✅ FIX: Check if team lead belongs to the ticket's team
+        is_team_lead_of_ticket = False
+        if user and ticket.team_id:
+            is_team_lead_of_ticket = user.teams.filter(id=ticket.team_id).exists()
+        
+        if not (is_admin or is_assigned_worker or is_team_lead_of_ticket):
+            raise PermissionDenied(
+                "You don't have permission to reopen this ticket. "
+                "Only the assigned agent/support, team lead, or admin can do this."
+            )
+        
+        old_status = ticket.status
+        try:
+            ticket = TicketWorkflow.reopen(ticket)
+        except ValueError as e:
+            raise ValueError(str(e))
+        
+        TicketHistory.objects.create(
+            ticket=ticket,
+            action="REOPENED",
+            comment=comment,
+            old_status=old_status,
+            new_status=ticket.status,
+            created_by=user,
+            metadata={"comment": comment}
+        )
+        return ticket
 
     # ---------- ADD COMMENT ----------
     @staticmethod
     def add_comment(ticket, request):
+        """Add a comment to a ticket."""
         comment = request.data.get("comment")
         if not comment:
             raise ValueError("Comment text is required")
+        
         history = TicketHistory.objects.create(
             ticket=ticket,
             action="COMMENTED",
@@ -376,3 +725,31 @@ class TicketService:
             created_by=request.user if request.user.is_authenticated else None,
         )
         return history
+
+    # ---------- GET TICKET OWNER ----------
+    @staticmethod
+    def get_ticket_owner(ticket):
+        """Get the current owner of the ticket."""
+        if ticket.assigned_to:
+            return ticket.assigned_to
+        if ticket.team:
+            return TicketService._get_team_lead(ticket.team)
+        return None
+
+    # ---------- GET TICKET SUMMARY ----------
+    @staticmethod
+    def get_ticket_summary(ticket):
+        """Get a summary of the ticket with all related information."""
+        return {
+            "id": ticket.id,
+            "ticket_number": ticket.ticket_number,
+            "title": ticket.title,
+            "status": ticket.status,
+            "priority": ticket.priority,
+            "created_at": ticket.created_at,
+            "assigned_to": ticket.assigned_to.get_full_name() if ticket.assigned_to else None,
+            "team": ticket.team.name if ticket.team else None,
+            "channel": ticket.channel.name if ticket.channel else None,
+            "customer": ticket.customer.full_name if ticket.customer else None,
+            "owner": TicketService.get_ticket_owner(ticket).get_full_name() if TicketService.get_ticket_owner(ticket) else None,
+        }

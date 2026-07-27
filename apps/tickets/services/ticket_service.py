@@ -1,5 +1,3 @@
-# apps/tickets/services/ticket_service.py
-
 import uuid
 from django.utils import timezone
 from django.contrib.auth import get_user_model
@@ -13,11 +11,316 @@ from apps.channels.models import Channel
 
 User = get_user_model()
 
+
 # =========================
-# CONSTANTS
+# PERMISSION SYSTEM - 100% Permission Based
 # =========================
-ALLOWED_ASSIGNEE_ROLES = ["AGENT", "SUPPORT", "ADMIN", "TEAM_LEAD"]
-WORKER_ROLES = ["AGENT", "SUPPORT", "TEAM_LEAD"]
+class TicketPermissions:
+    """
+    Complete permission-based access control for tickets.
+    No hardcoded roles - everything is driven by permissions.
+    """
+    
+    # ============================================================
+    # PERMISSION CODENAMES
+    # ============================================================
+    
+    # Ticket permissions
+    VIEW_TICKET = 'view_ticket'
+    ADD_TICKET = 'add_ticket'
+    EDIT_TICKET = 'edit_ticket'
+    DELETE_TICKET = 'delete_ticket'
+    
+    # Assignment permissions
+    ASSIGN_TICKET = 'assign_ticket'
+    ASSIGN_TICKET_TO_SUPPORT = 'assign_ticket_to_support'  # ✅ NEW
+    ASSIGN_TICKET_TO_TEAM = 'assign_ticket_to_team'        # ✅ NEW
+    ASSIGN_ANY_USER = 'assign_any_user'
+    CAN_BE_ASSIGNED = 'can_be_assigned'
+    
+    # Workflow permissions
+    START_PROGRESS = 'start_progress'
+    RESOLVE_TICKET = 'resolve_ticket'
+    CLOSE_TICKET = 'close_ticket'
+    REOPEN_TICKET = 'reopen_ticket'
+    
+    # Team permissions
+    CHANGE_TICKET_TEAM = 'change_ticket_team'
+    MANAGE_TEAM_TICKETS = 'manage_team_tickets'
+    VIEW_TEAM_TICKETS = 'view_team_tickets'
+    
+    # Leadership permission
+    CAN_LEAD_TEAM = 'can_lead_team'
+    
+    # Comment permissions
+    ADD_COMMENT = 'add_comment'
+    EDIT_COMMENT = 'edit_comment'
+    DELETE_COMMENT = 'delete_comment'
+    
+    # ============================================================
+    # CORE PERMISSION CHECK
+    # ============================================================
+    
+    @staticmethod
+    def has_permission(user, permission_codename):
+        """
+        Check if user has a specific permission.
+        Superuser always has all permissions.
+        """
+        if not user:
+            return False
+        
+        # Superuser has all permissions
+        if user.is_superuser:
+            return True
+        
+        # Check if user has the permission via their role
+        if hasattr(user, 'role') and user.role:
+            return user.role.permissions.filter(codename=permission_codename).exists()
+        
+        return False
+    
+    # ============================================================
+    # PERMISSION CHECKS
+    # ============================================================
+    
+    @staticmethod
+    def can_view_ticket(user, ticket=None):
+        """Check if user can view a ticket."""
+        if not user:
+            return False
+        
+        if user.is_superuser:
+            return True
+        
+        if TicketPermissions.has_permission(user, TicketPermissions.VIEW_TICKET):
+            return True
+        
+        if ticket and ticket.team_id:
+            if TicketPermissions.has_permission(user, TicketPermissions.VIEW_TEAM_TICKETS):
+                return user.teams.filter(id=ticket.team_id).exists()
+        
+        return False
+    
+    @staticmethod
+    def can_create_ticket(user):
+        """Check if user can create a ticket."""
+        if not user:
+            return False
+        
+        if user.is_superuser:
+            return True
+        
+        return TicketPermissions.has_permission(user, TicketPermissions.ADD_TICKET)
+    
+    @staticmethod
+    def can_edit_ticket(user, ticket=None):
+        """Check if user can edit a ticket."""
+        if not user:
+            return False
+        
+        if user.is_superuser:
+            return True
+        
+        if TicketPermissions.has_permission(user, TicketPermissions.EDIT_TICKET):
+            return True
+        
+        if ticket and ticket.team_id:
+            if TicketPermissions.has_permission(user, TicketPermissions.MANAGE_TEAM_TICKETS):
+                return user.teams.filter(id=ticket.team_id).exists()
+        
+        return False
+    
+    @staticmethod
+    def can_delete_ticket(user, ticket=None):
+        """Check if user can delete a ticket."""
+        if not user:
+            return False
+        
+        if user.is_superuser:
+            return True
+        
+        return TicketPermissions.has_permission(user, TicketPermissions.DELETE_TICKET)
+    
+    # ============================================================
+    # ✅ UPDATED: ASSIGN PERMISSIONS
+    # ============================================================
+    
+    @staticmethod
+    def can_assign_ticket(user, ticket=None):
+        """
+        Check if user can assign a ticket.
+        Supports: assign_ticket, assign_ticket_to_support, assign_ticket_to_team
+        """
+        if not user:
+            return False
+        
+        # Superuser can assign
+        if user.is_superuser:
+            return True
+        
+        # Check main assign_ticket permission
+        if TicketPermissions.has_permission(user, TicketPermissions.ASSIGN_TICKET):
+            return True
+        
+        # ✅ Check assign_ticket_to_support permission
+        if TicketPermissions.has_permission(user, TicketPermissions.ASSIGN_TICKET_TO_SUPPORT):
+            return True
+        
+        # ✅ Check assign_ticket_to_team permission
+        if TicketPermissions.has_permission(user, TicketPermissions.ASSIGN_TICKET_TO_TEAM):
+            return True
+        
+        # Allow if user has manage_team_tickets permission
+        if ticket and ticket.team_id:
+            if TicketPermissions.has_permission(user, TicketPermissions.MANAGE_TEAM_TICKETS):
+                return user.teams.filter(id=ticket.team_id).exists()
+        
+        # Allow if user has edit_ticket permission
+        if TicketPermissions.has_permission(user, TicketPermissions.EDIT_TICKET):
+            return True
+        
+        return False
+    
+    @staticmethod
+    def can_assign_to_user(assigner, assignee):
+        """
+        Check if assigner can assign to assignee.
+        Uses permissions instead of hardcoded roles.
+        """
+        if not assigner or not assignee:
+            return False
+        
+        # Superuser can assign to anyone
+        if assigner.is_superuser:
+            return True
+        
+        # Check if assigner has assign_any_user permission
+        if TicketPermissions.has_permission(assigner, TicketPermissions.ASSIGN_ANY_USER):
+            return True
+        
+        # ✅ Check if assigner has assign_ticket_to_support permission
+        if TicketPermissions.has_permission(assigner, TicketPermissions.ASSIGN_TICKET_TO_SUPPORT):
+            # Check if assignee has can_be_assigned permission
+            if TicketPermissions.has_permission(assignee, TicketPermissions.CAN_BE_ASSIGNED):
+                return True
+            # Check if assignee has SUPPORT role (backward compatibility)
+            if hasattr(assignee, 'role') and assignee.role:
+                if hasattr(assignee.role, 'name') and assignee.role.name.upper() == 'SUPPORT':
+                    return True
+        
+        # ✅ Check if assigner has assign_ticket_to_team permission
+        if TicketPermissions.has_permission(assigner, TicketPermissions.ASSIGN_TICKET_TO_TEAM):
+            # Check if assignee is in the same team
+            if assigner.teams.filter(id__in=assignee.teams.all()).exists():
+                return True
+        
+        # Check if assignee has can_be_assigned permission
+        if TicketPermissions.has_permission(assignee, TicketPermissions.CAN_BE_ASSIGNED):
+            return True
+        
+        return False
+    
+    @staticmethod
+    def can_start_progress(user, ticket=None):
+        """Check if user can start progress on a ticket."""
+        if not user:
+            return False
+        
+        if user.is_superuser:
+            return True
+        
+        if TicketPermissions.has_permission(user, TicketPermissions.START_PROGRESS):
+            return True
+        
+        if ticket and ticket.team_id:
+            if TicketPermissions.has_permission(user, TicketPermissions.MANAGE_TEAM_TICKETS):
+                return user.teams.filter(id=ticket.team_id).exists()
+        
+        return False
+    
+    @staticmethod
+    def can_resolve_ticket(user, ticket=None):
+        """Check if user can resolve a ticket."""
+        if not user:
+            return False
+        
+        if user.is_superuser:
+            return True
+        
+        if TicketPermissions.has_permission(user, TicketPermissions.RESOLVE_TICKET):
+            return True
+        
+        if ticket and ticket.team_id:
+            if TicketPermissions.has_permission(user, TicketPermissions.MANAGE_TEAM_TICKETS):
+                return user.teams.filter(id=ticket.team_id).exists()
+        
+        return False
+    
+    @staticmethod
+    def can_close_ticket(user, ticket=None):
+        """Check if user can close a ticket."""
+        if not user:
+            return False
+        
+        if user.is_superuser:
+            return True
+        
+        if TicketPermissions.has_permission(user, TicketPermissions.CLOSE_TICKET):
+            return True
+        
+        if ticket and ticket.team_id:
+            if TicketPermissions.has_permission(user, TicketPermissions.MANAGE_TEAM_TICKETS):
+                return user.teams.filter(id=ticket.team_id).exists()
+        
+        return False
+    
+    @staticmethod
+    def can_reopen_ticket(user, ticket=None):
+        """Check if user can reopen a ticket."""
+        if not user:
+            return False
+        
+        if user.is_superuser:
+            return True
+        
+        if TicketPermissions.has_permission(user, TicketPermissions.REOPEN_TICKET):
+            return True
+        
+        if ticket and ticket.team_id:
+            if TicketPermissions.has_permission(user, TicketPermissions.MANAGE_TEAM_TICKETS):
+                return user.teams.filter(id=ticket.team_id).exists()
+        
+        return False
+    
+    @staticmethod
+    def can_change_team(user, ticket=None):
+        """Check if user can change a ticket's team."""
+        if not user:
+            return False
+        
+        if user.is_superuser:
+            return True
+        
+        return TicketPermissions.has_permission(user, TicketPermissions.CHANGE_TICKET_TEAM)
+    
+    @staticmethod
+    def can_comment(user, ticket=None):
+        """Check if user can comment on a ticket."""
+        if not user:
+            return False
+        
+        if user.is_superuser:
+            return True
+        
+        if TicketPermissions.has_permission(user, TicketPermissions.ADD_COMMENT):
+            return True
+        
+        if ticket and ticket.team_id:
+            if TicketPermissions.has_permission(user, TicketPermissions.MANAGE_TEAM_TICKETS):
+                return user.teams.filter(id=ticket.team_id).exists()
+        
+        return False
 
 
 # =========================
@@ -37,7 +340,6 @@ class TicketWorkflow:
     def start_progress(ticket, user=None):
         """
         Start progress on a ticket.
-        Can be called by assigned agent, support, team lead, or admin.
         """
         if ticket.status not in ("ASSIGNED", "OPEN"):
             raise ValueError(f"Cannot start progress from status '{ticket.status}'")
@@ -78,13 +380,8 @@ class TicketWorkflow:
 # =========================
 class TicketService:
     """
-    Handles all ticket operations with proper channel → team → team lead flow.
-    
-    Flow: Channel → Team → Team Lead → Ticket Owner
-    - Channel determines the team
-    - Team lead is auto-assigned
-    - AGENTS and SUPPORT are manually assigned
-    - When assigned to ANY member, status becomes IN_PROGRESS
+    Handles all ticket operations with 100% permission-based access control.
+    No hardcoded roles - everything is driven by permissions.
     """
 
     @staticmethod
@@ -98,66 +395,19 @@ class TicketService:
             return None
 
     @staticmethod
-    def _get_user_role(user):
-        """Extract user role from various possible field structures."""
-        if not user:
-            return None
-        
-        if hasattr(user, "role") and user.role:
-            if hasattr(user.role, "name"):
-                return user.role.name.upper()
-            return str(user.role).upper()
-        elif hasattr(user, "role_name") and user.role_name:
-            return user.role_name.upper()
-        
-        return None
-
-    @staticmethod
-    def _is_admin(user):
-        """Check if user has admin role."""
-        role = TicketService._get_user_role(user)
-        return role == "ADMIN"
-
-    @staticmethod
-    def _is_team_lead(user):
-        """Check if user has team lead role."""
-        role = TicketService._get_user_role(user)
-        return role == "TEAM_LEAD"
-
-    @staticmethod
-    def _is_worker(user):
-        """Check if user is a worker (AGENT or SUPPORT or TEAM_LEAD)."""
-        role = TicketService._get_user_role(user)
-        return role in WORKER_ROLES
-
-    @staticmethod
-    def _is_assignable(user):
-        """Check if user can be assigned to a ticket."""
-        role = TicketService._get_user_role(user)
-        return role in ALLOWED_ASSIGNEE_ROLES
-
-    @staticmethod
     def _get_team_lead(team):
         """
         Get the team lead for a given team.
-        ✅ FIXED: Uses the many-to-many relationship correctly.
+        Based purely on the 'can_lead_team' permission.
         """
         if not team:
             return None
         
-        # ✅ FIX: Use the correct relationship - teams is a many-to-many field
-        # Find users who are members of this team AND have TEAM_LEAD role
+        # Find users who are members of this team AND have the 'can_lead_team' permission
         team_lead = User.objects.filter(
-            teams=team,  # ✅ Correct: many-to-many relationship
-            role__name="TEAM_LEAD"
+            teams=team,
+            role__permissions__codename='can_lead_team'
         ).first()
-        
-        # If no team lead found, try to find any user with TEAM_LEAD role
-        if not team_lead:
-            team_lead = User.objects.filter(
-                teams=team,
-                role_name="TEAM_LEAD"
-            ).first()
         
         return team_lead
 
@@ -263,7 +513,12 @@ class TicketService:
     def create_ticket(request):
         """Create a new ticket with automatic team and team lead assignment."""
         data = request.data
-        request_user_id = request.user.id if request.user.is_authenticated else None
+        request_user = request.user if request.user.is_authenticated else None
+        request_user_id = request_user.id if request_user else None
+
+        # 🔒 Permission check: can create ticket
+        if not TicketPermissions.can_create_ticket(request_user):
+            raise PermissionDenied("You don't have permission to create tickets")
 
         # ----- Customer handling with duplicate protection -----
         customer, customer_created = TicketService._get_or_create_customer(data, request_user_id)
@@ -295,16 +550,14 @@ class TicketService:
                 pass
 
         # ✅ Determine initial status
-        # If assigned to ANY member (Team Lead, Agent, Support), set to IN_PROGRESS
         initial_status = "OPEN"
         
-        # Check if assigned_to is provided
+        # If assigned_to is provided and assignable, set to IN_PROGRESS
         if assigned_to_id:
             assigned_user = User.objects.filter(id=assigned_to_id).first()
-            if assigned_user and TicketService._is_assignable(assigned_user):
+            if assigned_user and TicketPermissions.can_assign_to_user(request_user, assigned_user):
                 initial_status = "IN_PROGRESS"
         elif team_lead:
-            # If auto-assigned to team lead
             initial_status = "IN_PROGRESS"
 
         # ----- Create ticket -----
@@ -313,7 +566,7 @@ class TicketService:
             title=data.get("title"),
             description=data.get("description", ""),
             priority=data.get("priority", "MEDIUM"),
-            status=initial_status,  # ✅ Set correct initial status
+            status=initial_status,
             category_id=category_id,
             channel_id=channel_id,
             street_id=street_id,
@@ -326,19 +579,17 @@ class TicketService:
         # ----- Override assigned_to if explicitly provided -----
         if assigned_to_id:
             user = User.objects.filter(id=assigned_to_id).first()
-            if user:
+            if user and TicketPermissions.can_assign_to_user(request_user, user):
                 ticket.assigned_to = user
-                # ✅ If assigned to any assignable user, set to IN_PROGRESS
-                if TicketService._is_assignable(user):
-                    ticket.status = "IN_PROGRESS"
+                ticket.status = "IN_PROGRESS"
         
         # ----- Set assigned_by -----
         if assigned_by_id:
             by_user = User.objects.filter(id=assigned_by_id).first()
             if by_user:
                 ticket.assigned_by = by_user
-        elif request.user.is_authenticated:
-            ticket.assigned_by = request.user
+        elif request_user:
+            ticket.assigned_by = request_user
 
         ticket.save()
 
@@ -347,7 +598,7 @@ class TicketService:
             ticket=ticket,
             action="CREATED",
             comment=f"Ticket created with status: {ticket.status}",
-            created_by=request.user if request.user.is_authenticated else None,
+            created_by=request_user,
             metadata={
                 "title": ticket.title,
                 "description": ticket.description[:100] if ticket.description else "",
@@ -373,6 +624,12 @@ class TicketService:
         """
         Unified assign method that handles both agent/support and team assignment.
         """
+        user = request.user if request.user.is_authenticated else None
+        
+        # 🔒 Permission check: can assign ticket
+        if not TicketPermissions.can_assign_ticket(user, ticket):
+            raise PermissionDenied("You don't have permission to assign tickets")
+        
         assign_type = request.data.get("type")
         obj_id = request.data.get("id")
 
@@ -386,50 +643,40 @@ class TicketService:
         else:
             raise ValidationError("Invalid type. Use 'agent' or 'team'")
 
-    # ---------- ASSIGN WORKER (AGENT or SUPPORT) ----------
+    # ---------- ASSIGN WORKER ----------
     @staticmethod
     def assign_worker(ticket, request):
         """
-        Assign an agent or support staff to the ticket manually.
-        When assigned to ANY member, status becomes IN_PROGRESS.
+        Assign a user to the ticket manually.
+        Uses permissions to determine if the user can be assigned.
         """
+        user = request.user if request.user.is_authenticated else None
         worker_id = request.data.get("id") or request.data.get("agent_id")
         
         if not worker_id:
             raise ValidationError("worker_id is required")
-
-        requesting_user = request.user if request.user.is_authenticated else None
-        is_admin = TicketService._is_admin(requesting_user)
-        is_team_lead = TicketService._is_team_lead(requesting_user)
 
         try:
             worker = User.objects.get(id=worker_id)
         except User.DoesNotExist:
             raise ValidationError("User not found")
 
-        # Get worker's role
-        role_name = TicketService._get_user_role(worker)
-        is_assignable = TicketService._is_assignable(worker)
-
-        # Allow admin to assign to anyone, restrict others to assignable roles
-        if not is_admin and not is_assignable:
-            allowed_roles_display = ", ".join(role.lower() for role in ALLOWED_ASSIGNEE_ROLES)
-            raise ValidationError(f"Only {allowed_roles_display} can be assigned")
-
-        # Additional validation for non-admins
-        if not is_admin:
+        # 🔒 Check if user can be assigned to
+        if not TicketPermissions.can_assign_to_user(user, worker):
+            raise ValidationError("This user cannot be assigned to tickets")
+        
+        # 🔒 Additional validation: check if worker is in the same team
+        if not TicketPermissions.has_permission(user, TicketPermissions.ASSIGN_ANY_USER):
             if not worker.is_active:
                 raise ValidationError("Cannot assign to inactive user")
             
-            # ✅ FIX: Use many-to-many relationship for team check
-            if is_team_lead:
-                # Check if worker is in the same team as the team lead
-                user_team_ids = requesting_user.teams.values_list('id', flat=True)
+            # Check if worker is in the same team
+            if ticket.team_id:
+                user_team_ids = user.teams.values_list('id', flat=True)
                 worker_team_ids = worker.teams.values_list('id', flat=True)
                 
-                # Check if they share at least one team
                 if not set(user_team_ids).intersection(set(worker_team_ids)):
-                    raise ValidationError("You can only assign workers from your team")
+                    raise ValidationError("Worker must be in the same team")
 
         old_assignee = ticket.assigned_to
         old_team = ticket.team
@@ -437,22 +684,16 @@ class TicketService:
 
         # Assign the worker
         ticket.assigned_to = worker
-        ticket.assigned_by = requesting_user
-        
-        # ✅ ANY assigned member -> IN_PROGRESS
+        ticket.assigned_by = user
         ticket.status = "IN_PROGRESS"
-        
         ticket.save()
 
         # Create history entry
-        role_display = role_name.lower()
-        comment = f"Assigned to {role_display} {worker.get_full_name() or worker.username}"
-        if is_admin:
-            comment += " (admin override)"
-        elif is_team_lead and worker.id == requesting_user.id:
-            comment += " (self-assigned by team lead)"
+        comment = f"Assigned to {worker.get_full_name() or worker.username}"
         
-        # Add status change info
+        if TicketPermissions.has_permission(user, TicketPermissions.ASSIGN_ANY_USER):
+            comment += " (admin override)"
+        
         if old_status != ticket.status:
             comment += f" (status changed from {old_status} to {ticket.status})"
         
@@ -466,37 +707,34 @@ class TicketService:
             new_team=old_team,
             old_status=old_status,
             new_status=ticket.status,
-            created_by=requesting_user,
+            created_by=user,
             metadata={
                 "worker_id": worker.id,
-                "role": role_name,
-                "assigned_by_admin": is_admin,
-                "assigned_by_team_lead": is_team_lead,
+                "assigned_by": user.id if user else None,
+                "assigned_by_permission": TicketPermissions.has_permission(user, TicketPermissions.ASSIGN_ANY_USER),
                 "team_id": ticket.team_id,
-                "self_assigned": worker.id == requesting_user.id,
                 "status_changed": old_status != ticket.status,
             }
         )
 
         return ticket
 
-    # ---------- CHANGE TEAM (Admin only) ----------
+    # ---------- CHANGE TEAM ----------
     @staticmethod
     def change_team(ticket, request):
         """
         Change the team for a ticket.
-        Only admins can do this.
+        Requires change_ticket_team permission.
         """
+        user = request.user if request.user.is_authenticated else None
         team_id = request.data.get("id") or request.data.get("team_id")
         
         if not team_id:
             raise ValidationError("team_id is required")
 
-        requesting_user = request.user if request.user.is_authenticated else None
-        is_admin = TicketService._is_admin(requesting_user)
-
-        if not is_admin:
-            raise PermissionDenied("Only admins can change team assignment")
+        # 🔒 Permission check: can change team
+        if not TicketPermissions.can_change_team(user, ticket):
+            raise PermissionDenied("You don't have permission to change ticket team")
 
         try:
             new_team = Team.objects.get(id=team_id)
@@ -508,7 +746,7 @@ class TicketService:
         old_status = ticket.status
 
         ticket.team = new_team
-        ticket.assigned_by = requesting_user
+        ticket.assigned_by = user
         ticket.save()
 
         # Get new team lead
@@ -516,12 +754,10 @@ class TicketService:
         
         if new_team_lead:
             ticket.assigned_to = new_team_lead
-            # ✅ Team lead assigned -> IN_PROGRESS
             ticket.status = "IN_PROGRESS"
             ticket.save()
             new_assignee = new_team_lead
         else:
-            # No team lead, keep old assignee
             new_assignee = old_assignee
 
         TicketHistory.objects.create(
@@ -534,7 +770,7 @@ class TicketService:
             new_assignee=new_assignee,
             old_status=old_status,
             new_status=ticket.status,
-            created_by=requesting_user,
+            created_by=user,
             metadata={
                 "old_team_id": old_team.id if old_team else None,
                 "new_team_id": new_team.id,
@@ -550,32 +786,16 @@ class TicketService:
     def start_progress(ticket, request):
         """
         Start progress on a ticket.
-        Can be performed by:
-        - Assigned AGENT or SUPPORT
-        - Team Lead of the ticket's team
-        - Admin
         """
         user = request.user if request.user.is_authenticated else None
         
         if not user:
             raise PermissionDenied("Authentication required")
         
-        # Check if user has permission to start progress
-        is_admin = TicketService._is_admin(user)
-        is_team_lead = TicketService._is_team_lead(user)
-        is_assigned_worker = ticket.assigned_to and ticket.assigned_to.id == user.id
-        
-        # ✅ FIX: Check if team lead belongs to the ticket's team
-        is_team_lead_of_ticket = False
-        if is_team_lead and ticket.team_id:
-            # Check if user is a member of the ticket's team
-            is_team_lead_of_ticket = user.teams.filter(id=ticket.team_id).exists()
-        
-        # Allow if: Admin OR Assigned Worker (AGENT/SUPPORT) OR Team Lead of the ticket's team
-        if not (is_admin or is_assigned_worker or is_team_lead_of_ticket):
+        # 🔒 Permission check: can start progress
+        if not TicketPermissions.can_start_progress(user, ticket):
             raise PermissionDenied(
-                "You don't have permission to start progress on this ticket. "
-                "Only the assigned agent/support, team lead, or admin can do this."
+                "You don't have permission to start progress on this ticket."
             )
         
         old_status = ticket.status
@@ -594,7 +814,6 @@ class TicketService:
             created_by=user,
             metadata={
                 "user_id": user.id,
-                "user_role": TicketService._get_user_role(user),
                 "assigned_to": ticket.assigned_to.id if ticket.assigned_to else None,
             }
         )
@@ -607,19 +826,10 @@ class TicketService:
         """Resolve a ticket."""
         user = request.user if request.user.is_authenticated else None
         
-        # Check permission to resolve
-        is_admin = TicketService._is_admin(user)
-        is_assigned_worker = ticket.assigned_to and ticket.assigned_to.id == user.id
-        
-        # ✅ FIX: Check if team lead belongs to the ticket's team
-        is_team_lead_of_ticket = False
-        if user and ticket.team_id:
-            is_team_lead_of_ticket = user.teams.filter(id=ticket.team_id).exists()
-        
-        if not (is_admin or is_assigned_worker or is_team_lead_of_ticket):
+        # 🔒 Permission check: can resolve ticket
+        if not TicketPermissions.can_resolve_ticket(user, ticket):
             raise PermissionDenied(
-                "You don't have permission to resolve this ticket. "
-                "Only the assigned agent/support, team lead, or admin can do this."
+                "You don't have permission to resolve this ticket."
             )
         
         old_status = ticket.status
@@ -645,18 +855,10 @@ class TicketService:
         """Close a ticket."""
         user = request.user if request.user.is_authenticated else None
         
-        is_admin = TicketService._is_admin(user)
-        is_assigned_worker = ticket.assigned_to and ticket.assigned_to.id == user.id
-        
-        # ✅ FIX: Check if team lead belongs to the ticket's team
-        is_team_lead_of_ticket = False
-        if user and ticket.team_id:
-            is_team_lead_of_ticket = user.teams.filter(id=ticket.team_id).exists()
-        
-        if not (is_admin or is_assigned_worker or is_team_lead_of_ticket):
+        # 🔒 Permission check: can close ticket
+        if not TicketPermissions.can_close_ticket(user, ticket):
             raise PermissionDenied(
-                "You don't have permission to close this ticket. "
-                "Only the assigned agent/support, team lead, or admin can do this."
+                "You don't have permission to close this ticket."
             )
         
         old_status = ticket.status
@@ -679,18 +881,10 @@ class TicketService:
         """Reopen a closed or resolved ticket."""
         user = request.user if request.user.is_authenticated else None
         
-        is_admin = TicketService._is_admin(user)
-        is_assigned_worker = ticket.assigned_to and ticket.assigned_to.id == user.id
-        
-        # ✅ FIX: Check if team lead belongs to the ticket's team
-        is_team_lead_of_ticket = False
-        if user and ticket.team_id:
-            is_team_lead_of_ticket = user.teams.filter(id=ticket.team_id).exists()
-        
-        if not (is_admin or is_assigned_worker or is_team_lead_of_ticket):
+        # 🔒 Permission check: can reopen ticket
+        if not TicketPermissions.can_reopen_ticket(user, ticket):
             raise PermissionDenied(
-                "You don't have permission to reopen this ticket. "
-                "Only the assigned agent/support, team lead, or admin can do this."
+                "You don't have permission to reopen this ticket."
             )
         
         old_status = ticket.status
@@ -714,15 +908,21 @@ class TicketService:
     @staticmethod
     def add_comment(ticket, request):
         """Add a comment to a ticket."""
+        user = request.user if request.user.is_authenticated else None
         comment = request.data.get("comment")
+        
         if not comment:
             raise ValueError("Comment text is required")
+        
+        # 🔒 Permission check: can comment
+        if not TicketPermissions.can_comment(user, ticket):
+            raise PermissionDenied("You don't have permission to comment on this ticket")
         
         history = TicketHistory.objects.create(
             ticket=ticket,
             action="COMMENTED",
             comment=comment,
-            created_by=request.user if request.user.is_authenticated else None,
+            created_by=user,
         )
         return history
 

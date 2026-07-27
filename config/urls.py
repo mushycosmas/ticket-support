@@ -3,6 +3,7 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 
+
 urlpatterns = [
     path('admin/', admin.site.urls),
 
@@ -42,8 +43,9 @@ urlpatterns = [
      #roles
      path("api/roles/", include("apps.roles.urls")),
      #permissions
-    path("api/", include("apps.faqs.urls")),
-  
+     path("api/", include("apps.faqs.urls")),
+
+     path("api/nida/", include("apps.nida.urls")),
   
 ]
 
